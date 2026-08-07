@@ -42,12 +42,33 @@ pr-session lookup <pr> [--json] [--min exact|high|medium|low] [--no-heuristic]
 pr-session session <agent/id|id> [--json]
 pr-session stamp --agent <claude|codex|cursor> --id <sessionId> \
   [--cloud-url <url>] [--title <t>] [--trailers|--token]
-pr-session open <pr>    # prints path or cloud URL; set PR_SESSION_NO_OPEN=1 to skip opening
+pr-session open <pr>    # opens the best match (deeplink / cloud URL / transcript); PR_SESSION_NO_OPEN=1 to print only
 pr-session stats
 pr-session help
 ```
 
 `<pr>` can be a full GitHub URL, `owner/repo#123`, or a bare number (uses `gh` against the current repo). Prefer `--min exact` when you only want Claude `pr-link` events and body stamps; `--no-heuristic` drops branch/time/fingerprint matching.
+
+## Opening a matched session
+
+`lookup` (and `open`) surface more than a transcript path. Each match includes whatever resume / open affordance that agent supports:
+
+| Agent | What you get |
+| --- | --- |
+| Claude Code | `claude --resume <id>` (plus `cd` into the session cwd when known) |
+| Codex | `codex resume <id>` |
+| Cursor cloud (`bc-…`) | `https://cursor.com/agents/bc-…`, plus a `cursor://…/background-agent?bcId=` note |
+| Cursor local (Agent ID UUID) | Desktop deeplink `cursor://anysphere.cursor-deeplink/agent?id=<uuid>` — same id as **Copy Agent ID** in the Agents sidebar. Opens the Agents window and selects that chat when it still exists locally. Transcript `file://` remains available as a fallback. |
+
+```bash
+pr-session lookup 18403
+# … open cursor://anysphere.cursor-deeplink/agent?id=3b66e79d-…
+
+pr-session open 18403          # opens that deeplink (or cloud URL / transcript)
+open 'cursor://anysphere.cursor-deeplink/agent?id=<AGENT_ID>'
+```
+
+Bugbot’s `https://cursor.com/open?link=…` URLs are a different payload (encrypted fix data), not a general open-by-agent-id link. Local Cursor chats still have no shareable `https://` URL for reviewers — the deeplink only works on a machine that already has the chat.
 
 ## How matching works
 
@@ -69,7 +90,7 @@ flowchart LR
 
 Claude’s `--from-pr` already resumes the linked local Claude session. Copilot’s cloud agent puts a session-log URL on every agent commit. Cursor Cloud gives you shareable `cursor.com/agents/…` runs. Those are great inside one product.
 
-pr-session is for the day you bounced between Claude, Codex, and local Cursor and want one index keyed by PR. It does not replace those vendor flows. Local IDE Cursor chats in particular still have no first-party PR join; that is a lot of why this exists.
+pr-session is for the day you bounced between Claude, Codex, and local Cursor and want one index keyed by PR. It does not replace those vendor flows. Local IDE Cursor chats still have no first-party PR join (that is a lot of why this exists); once you have the Agent ID, Cursor’s own `cursor://…/agent?id=` deeplink is enough to jump back into the chat.
 
 ## Privacy
 
