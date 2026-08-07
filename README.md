@@ -1,0 +1,107 @@
+# pr-session
+
+You open a PR and later wonder which Claude Code, Codex, or Cursor session actually produced it. The agents leave soft fingerprints (`Generated with Claude Code`, `Made with Cursor`), and Claude even keeps local `pr-link` metadata, but nothing ties those threads together across tools. **pr-session** is a small local CLI (and library) that indexes the transcripts on your machine and lets you go PR → session and session → PR.
+
+v0.1 is meant to be cloned and run from source. It is not on npm yet, so `npx` / global install will not resolve until you publish.
+
+## Getting started
+
+You need Node 20+, an authenticated GitHub CLI (`gh auth login`) for `lookup` / `open`, and whatever agent transcript dirs you already have under `~/.claude`, `~/.codex`, and `~/.cursor`.
+
+```bash
+git clone https://github.com/daviskeene/pr-session.git
+cd pr-session
+npm install
+npm run build
+npm link   # optional
+```
+
+Without linking, prefix commands with `npm run pr-session --`.
+
+Index once, then ask about a PR:
+
+```bash
+pr-session index
+pr-session lookup https://github.com/org/repo/pull/123
+```
+
+For future PRs, stamp the session id into the description so the next lookup is exact:
+
+```bash
+pr-session stamp --agent claude --id "$SESSION_ID"
+# paste the markdown block into the PR body
+```
+
+Session ids usually fall out of `lookup` itself. If you need to dig: Claude’s `sessionId` (and the `.jsonl` filename) under `~/.claude/projects/`, Codex’s UUID in `~/.codex/sessions/**/rollout-*-<uuid>.jsonl`, Cursor’s folder under `~/.cursor/projects/<project>/agent-transcripts/<uuid>/`. Worked stamp and JSON lookup samples live in [`examples/`](examples/).
+
+## Commands
+
+```bash
+pr-session index [--json]
+pr-session lookup <pr> [--json] [--min exact|high|medium|low] [--no-heuristic]
+pr-session session <agent/id|id> [--json]
+pr-session stamp --agent <claude|codex|cursor> --id <sessionId> \
+  [--cloud-url <url>] [--title <t>] [--trailers|--token]
+pr-session open <pr>    # prints path or cloud URL; set PR_SESSION_NO_OPEN=1 to skip opening
+pr-session stats
+pr-session help
+```
+
+`<pr>` can be a full GitHub URL, `owner/repo#123`, or a bare number (uses `gh` against the current repo). Prefer `--min exact` when you only want Claude `pr-link` events and body stamps; `--no-heuristic` drops branch/time/fingerprint matching.
+
+## How matching works
+
+Exact hits come first: Claude Code’s `pr-link` transcript events, and `agent-session://…` tokens from `stamp` in the PR body. Medium-confidence signals include PR URLs mentioned in a transcript, and the usual branch + repo (+ time window) heuristics, sometimes narrowed by soft body fingerprints like “Generated with Claude Code.” Stamp going forward when you care about a clean reverse path later.
+
+```mermaid
+flowchart LR
+  PR[GitHub PR] --> Exact
+  Exact[Exact links] --> Out[Ranked sessions]
+  Heuristic[Heuristics] --> Out
+  Stamp[PR body stamps] --> Exact
+  ClaudePrLink[Claude pr-link events] --> Exact
+  Mention[Transcript PR URL mentions] --> Exact
+  Branch[branch + repo + time] --> Heuristic
+  Fingerprint[Generated with Claude / Made with Cursor] --> Heuristic
+```
+
+## Where this sits next to vendor tools
+
+Claude’s `--from-pr` already resumes the linked local Claude session. Copilot’s cloud agent puts a session-log URL on every agent commit. Cursor Cloud gives you shareable `cursor.com/agents/…` runs. Those are great inside one product.
+
+pr-session is for the day you bounced between Claude, Codex, and local Cursor and want one index keyed by PR. It does not replace those vendor flows. Local IDE Cursor chats in particular still have no first-party PR join; that is a lot of why this exists.
+
+## Privacy
+
+Most transcripts should stay on your laptop. The index at `~/.pr-session/index.json` stores ids, paths, branches, and repo guesses, not full chat logs. A plain `stamp` only puts a token and a “transcript is local” note on the PR if you paste it. Add `--cloud-url` when you actually want reviewers to open a shareable run. Never paste raw `*.jsonl` into GitHub.
+
+## Library layout
+
+Resolve, stamp, and types are filesystem-free and safe to import from an Action. Local indexing and the `gh` helper are author-machine adapters.
+
+```ts
+import { resolveSessionsForPr } from "pr-session/resolve";
+import { buildStamp, extractStampTokens } from "pr-session/stamp";
+import { buildIndex, loadIndex } from "pr-session/local"; // author machine only
+```
+
+| Import | What you get |
+| --- | --- |
+| `pr-session/resolve` | PR ↔ session matching |
+| `pr-session/stamp` | stamp builders / token parsers |
+| `pr-session/types` | shared types |
+| `pr-session/local` | `buildIndex` / `loadIndex` (local FS) |
+| `pr-session/github` | `fetchPrMeta` via local `gh` |
+| `pr-session` | convenience barrel for the CLI |
+
+A sketch of a future Action that only surfaces cloud stamps is in [`examples/github-action.md`](examples/github-action.md).
+
+## Data sources
+
+Claude lives at `~/.claude/projects/**/*.jsonl` (`pr-link`, `sessionId`, `gitBranch`, `cwd`). Codex rollouts are under `~/.codex/sessions/**/*.jsonl` with useful `session_meta` git fields. Cursor chats are under `~/.cursor/projects/*/agent-transcripts/**/*.jsonl`. The cache is always `~/.pr-session/index.json`.
+
+## When something looks wrong
+
+If there is no index, run `pr-session index`. Empty matches usually mean you need to re-index after the agent run, drop `--min exact`, or confirm the transcript dirs above actually have files. A `gh unavailable` warning means auth is missing or you should pass a full PR URL. Cursor hits that resolve into `empty-window` should improve after a fresh index (v0.1 prefers real project dirs). Lookup working on your machine and nowhere else is expected: local transcripts do not travel with the PR. Noisy heuristics are a good reason for `--min exact` / `--no-heuristic`, and for stamping next time.
+
+While we are on `0.x`, minor bumps may break APIs. See [CHANGELOG.md](CHANGELOG.md). MIT license, Copyright (c) 2026 Davis Keene.

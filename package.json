@@ -1,0 +1,79 @@
+{
+  "name": "pr-session",
+  "version": "0.1.0",
+  "description": "Bidirectional attribution between GitHub PRs and local Claude Code / Codex / Cursor agent sessions",
+  "type": "module",
+  "bin": {
+    "pr-session": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./resolve": {
+      "types": "./dist/core/resolve.d.ts",
+      "import": "./dist/core/resolve.js"
+    },
+    "./stamp": {
+      "types": "./dist/core/stamp.d.ts",
+      "import": "./dist/core/stamp.js"
+    },
+    "./types": {
+      "types": "./dist/core/types.d.ts",
+      "import": "./dist/core/types.js"
+    },
+    "./local": {
+      "types": "./dist/local/index.d.ts",
+      "import": "./dist/local/index.js"
+    },
+    "./github": {
+      "types": "./dist/adapters/github/index.d.ts",
+      "import": "./dist/adapters/github/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm test && npm run build",
+    "dev": "tsx src/cli.ts",
+    "pr-session": "tsx src/cli.ts",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "author": {
+    "name": "Davis Keene",
+    "email": "dbkeene.tsyc@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/daviskeene/pr-session.git"
+  },
+  "homepage": "https://github.com/daviskeene/pr-session#readme",
+  "bugs": {
+    "url": "https://github.com/daviskeene/pr-session/issues"
+  },
+  "keywords": [
+    "github",
+    "pull-request",
+    "claude-code",
+    "codex",
+    "cursor",
+    "attribution",
+    "agent"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

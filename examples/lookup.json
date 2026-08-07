@@ -1,0 +1,31 @@
+{
+  "pr": {
+    "owner": "joinhandshake",
+    "repo": "joinera",
+    "number": 15451,
+    "url": "https://github.com/joinhandshake/joinera/pull/15451"
+  },
+  "title": "Example PR title",
+  "matches": [
+    {
+      "pr": {
+        "owner": "joinhandshake",
+        "repo": "joinera",
+        "number": 15451,
+        "url": "https://github.com/joinhandshake/joinera/pull/15451"
+      },
+      "session": {
+        "agent": "claude",
+        "sessionId": "70b1d898-bfab-4739-8b75-fcf61b53e470",
+        "visibility": "local",
+        "transcriptPath": "/Users/you/.claude/projects/-Users-you-github-joinera/70b1d898-bfab-4739-8b75-fcf61b53e470.jsonl",
+        "cwd": "/Users/you/github/joinera",
+        "branch": "feature/example",
+        "repo": "joinera"
+      },
+      "confidence": "exact",
+      "reason": "pr-link-event",
+      "observedAt": "2026-07-09T19:54:22.495Z"
+    }
+  ]
+}
