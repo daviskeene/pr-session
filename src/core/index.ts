@@ -37,3 +37,12 @@ export {
 } from "./stamp.js";
 
 export { detectAgentFingerprints } from "./fingerprints.js";
+
+export {
+  pathToFileUrl,
+  sessionOpenLinks,
+  cursorAgentDesktopDeeplink,
+  cursorCloudAgentDesktopDeeplink,
+  shellQuote,
+  type SessionOpenLinks,
+} from "./resume.js";

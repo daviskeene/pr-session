@@ -22,6 +22,7 @@ import {
   resolvePrsForSession,
   resolveSessionsForPr,
   saveIndex,
+  sessionOpenLinks,
   type AgentKind,
   type MatchConfidence,
 } from "./index.js";
@@ -141,7 +142,10 @@ async function cmdLookup(args: string[]): Promise<void> {
         {
           pr: meta.ref,
           title: meta.title,
-          matches: links,
+          matches: links.map((link) => ({
+            ...link,
+            open: sessionOpenLinks(link.session),
+          })),
           warning: ghWarning,
         },
         null,
@@ -161,7 +165,7 @@ async function cmdLookup(args: string[]): Promise<void> {
   }
   for (const link of links) {
     console.log(`\n- ${formatLinkForCli(link)}`);
-    if (link.session.visibility === "local") {
+    if (link.session.visibility === "local" && !link.session.cloudUrl) {
       console.log("  (local transcript — author machine only)");
     }
   }
@@ -268,9 +272,10 @@ async function cmdOpen(args: string[]): Promise<void> {
     console.error("No session match to open.");
     process.exit(3);
   }
-  if (best.session.cloudUrl) {
-    console.log(best.session.cloudUrl);
-    tryOpen(best.session.cloudUrl);
+  const open = sessionOpenLinks(best.session);
+  if (open.openUrl) {
+    console.log(open.openUrl);
+    tryOpen(open.openUrl);
     return;
   }
   const p = best.session.transcriptPath;

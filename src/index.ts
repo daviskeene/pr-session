@@ -47,6 +47,16 @@ export {
 export { detectAgentFingerprints } from "./core/fingerprints.js";
 
 export {
+  cursorAgentDesktopDeeplink,
+  cursorCloudAgentDesktopDeeplink,
+  hyperlink,
+  pathToFileUrl,
+  sessionOpenLinks,
+  shellQuote,
+  type SessionOpenLinks,
+} from "./core/resume.js";
+
+export {
   buildIndex,
   defaultIndexPath,
   finalizeIndex,

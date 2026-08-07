@@ -11,6 +11,7 @@ import {
   preferSession,
   resolvePrsForSession,
   resolveSessionsForPr,
+  sessionOpenLinks,
   stampToken,
   validateIndex,
   type LinkRecord,
@@ -362,5 +363,67 @@ describe("fingerprints", () => {
       detectAgentFingerprints("Made with [Cursor](https://cursor.com)"),
       ["cursor"],
     );
+  });
+});
+
+describe("sessionOpenLinks", () => {
+  it("builds Claude resume + file view URL", () => {
+    const links = sessionOpenLinks({
+      agent: "claude",
+      sessionId: "abc-123",
+      visibility: "local",
+      cwd: "/Users/you/github/joinera",
+      transcriptPath:
+        "/Users/you/.claude/projects/-Users-you-github-joinera/abc-123.jsonl",
+    });
+    assert.equal(
+      links.resumeCommand,
+      "cd /Users/you/github/joinera && claude --resume abc-123",
+    );
+    assert.equal(
+      links.viewUrl,
+      "file:///Users/you/.claude/projects/-Users-you-github-joinera/abc-123.jsonl",
+    );
+  });
+
+  it("builds Codex resume command", () => {
+    const links = sessionOpenLinks({
+      agent: "codex",
+      sessionId: "019a4faf-ce63-7b11-98a5-a9966f0f6e0d",
+      visibility: "local",
+    });
+    assert.equal(
+      links.resumeCommand,
+      "codex resume 019a4faf-ce63-7b11-98a5-a9966f0f6e0d",
+    );
+  });
+
+  it("uses Cursor cloud URL / deeplink note for bc- ids", () => {
+    const links = sessionOpenLinks({
+      agent: "cursor",
+      sessionId: "bc-abc",
+      visibility: "cloud",
+    });
+    assert.equal(links.openUrl, "https://cursor.com/agents/bc-abc");
+    assert.ok(
+      links.notes.some((n) => n.includes("cursor://anysphere.cursor-deeplink")),
+    );
+  });
+
+  it("builds Cursor local agent desktop deeplink from Agent ID", () => {
+    const id = "3b66e79d-cf6f-445a-aa7f-df5094f26b06";
+    const links = sessionOpenLinks({
+      agent: "cursor",
+      sessionId: id,
+      visibility: "local",
+      cwd: "/Users/you/github/joinera",
+      transcriptPath: "/tmp/t.jsonl",
+    });
+    assert.equal(
+      links.openUrl,
+      `cursor://anysphere.cursor-deeplink/agent?id=${id}`,
+    );
+    assert.equal(links.viewUrl, "file:///tmp/t.jsonl");
+    assert.ok(links.notes.some((n) => /Agents window/i.test(n)));
   });
 });
