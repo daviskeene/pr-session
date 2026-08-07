@@ -38,11 +38,11 @@ Session ids usually fall out of `lookup` itself. If you need to dig: Claude’s 
 
 ```bash
 pr-session index [--json]
-pr-session lookup <pr> [--json] [--min exact|high|medium|low] [--no-heuristic]
-pr-session session <agent/id|id> [--json]
+pr-session lookup <pr> [--json] [--open] [--min exact|high|medium|low] [--no-heuristic]
+pr-session session <agent/id|id> [--json] [--open]
 pr-session stamp --agent <claude|codex|cursor> --id <sessionId> \
   [--cloud-url <url>] [--title <t>] [--trailers|--token]
-pr-session open <pr>    # opens the best match (deeplink / cloud URL / transcript); PR_SESSION_NO_OPEN=1 to print only
+pr-session open <pr>    # resume/open the best match (same as lookup --open); PR_SESSION_NO_OPEN=1 to print only
 pr-session stats
 pr-session help
 ```
@@ -51,21 +51,23 @@ pr-session help
 
 ## Opening a matched session
 
-`lookup` (and `open`) surface more than a transcript path. Each match includes whatever resume / open affordance that agent supports:
+`lookup` prints resume / open affordances for each match. `pr-session open <pr>` (or `lookup` / `session` with `--open`) **runs** the best one:
 
-| Agent | What you get |
+| Agent | Action |
 | --- | --- |
-| Claude Code | `claude --resume <id>` (plus `cd` into the session cwd when known) |
-| Codex | `codex resume <id>` |
-| Cursor cloud (`bc-…`) | `https://cursor.com/agents/bc-…`, plus a `cursor://…/background-agent?bcId=` note |
-| Cursor local (Agent ID UUID) | Desktop deeplink `cursor://anysphere.cursor-deeplink/agent?id=<uuid>` — same id as **Copy Agent ID** in the Agents sidebar. Opens the Agents window and selects that chat when it still exists locally. Transcript `file://` remains available as a fallback. |
+| Claude Code | runs `claude --resume <id>` (from the session cwd when known) |
+| Codex | runs `codex resume <id>` |
+| Cursor cloud (`bc-…`) | opens `https://cursor.com/agents/bc-…` |
+| Cursor local (Agent ID UUID) | opens `cursor://anysphere.cursor-deeplink/agent?id=<uuid>` (same id as **Copy Agent ID**) |
+| Fallback | opens the transcript JSONL |
 
 ```bash
-pr-session lookup 18403
-# … open cursor://anysphere.cursor-deeplink/agent?id=3b66e79d-…
+pr-session lookup 17533
+# … resume cd … && claude --resume be04ee9a-…
 
-pr-session open 18403          # opens that deeplink (or cloud URL / transcript)
-open 'cursor://anysphere.cursor-deeplink/agent?id=<AGENT_ID>'
+pr-session open 17533              # runs that Claude resume
+pr-session lookup 18403 --open     # opens Cursor agent deeplink for best match
+pr-session session claude/be04… --open
 ```
 
 Bugbot’s `https://cursor.com/open?link=…` URLs are a different payload (encrypted fix data), not a general open-by-agent-id link. Local Cursor chats still have no shareable `https://` URL for reviewers — the deeplink only works on a machine that already has the chat.

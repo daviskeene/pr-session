@@ -51,8 +51,10 @@ export {
   cursorCloudAgentDesktopDeeplink,
   hyperlink,
   pathToFileUrl,
+  sessionLaunch,
   sessionOpenLinks,
   shellQuote,
+  type SessionLaunch,
   type SessionOpenLinks,
 } from "./core/resume.js";
 

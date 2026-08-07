@@ -6,7 +6,7 @@
  * author-facing surface. Local transcripts stay on-machine unless a cloud URL
  * exists (e.g. Cursor cloud agents).
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import process from "node:process";
 import { formatLinkForCli } from "./cli/format.js";
@@ -22,9 +22,11 @@ import {
   resolvePrsForSession,
   resolveSessionsForPr,
   saveIndex,
+  sessionLaunch,
   sessionOpenLinks,
   type AgentKind,
   type MatchConfidence,
+  type SessionRecord,
 } from "./index.js";
 
 const CONFIDENCES = new Set<MatchConfidence>([
@@ -38,12 +40,17 @@ const HELP = `pr-session — map GitHub PRs ↔ Claude Code / Codex / Cursor ses
 
 Usage:
   pr-session index [--json]
-  pr-session lookup <pr> [--json] [--min exact|high|medium|low] [--no-heuristic]
-  pr-session session <agent/id|/id> [--json]
+  pr-session lookup <pr> [--json] [--open] [--min exact|high|medium|low] [--no-heuristic]
+  pr-session session <agent/id|id> [--json] [--open]
   pr-session stamp --agent <claude|codex|cursor> --id <sessionId> [--cloud-url <url>] [--title <t>]
-  pr-session open <pr>          # print best local transcript path (and open if possible)
+  pr-session open <pr>          # resume/open the best match (same as lookup --open)
   pr-session stats
   pr-session help
+
+Resume / open:
+  Claude → \`claude --resume <id>\`   Codex → \`codex resume <id>\`
+  Cursor → desktop deeplink (or cloud URL). Transcript file is last resort.
+  \`--open\` / \`open\` run that action. Set PR_SESSION_NO_OPEN=1 to print only.
 
 Notes:
   Local transcripts are for the author, not PR reviewers. Cloud session URLs
@@ -110,6 +117,7 @@ async function cmdIndex(args: string[]): Promise<void> {
 
 async function cmdLookup(args: string[]): Promise<void> {
   const asJson = args.includes("--json");
+  const shouldOpen = args.includes("--open");
   const noHeuristic = args.includes("--no-heuristic");
   const min = parseMin(flagValue(args, "--min") ?? "low");
   const input = positionalArgs(args)[0];
@@ -145,6 +153,7 @@ async function cmdLookup(args: string[]): Promise<void> {
           matches: links.map((link) => ({
             ...link,
             open: sessionOpenLinks(link.session),
+            launch: sessionLaunch(link.session),
           })),
           warning: ghWarning,
         },
@@ -152,6 +161,14 @@ async function cmdLookup(args: string[]): Promise<void> {
         2,
       ),
     );
+    if (shouldOpen) {
+      const best = links[0];
+      if (!best) {
+        console.error("No session match to open.");
+        process.exit(3);
+      }
+      launchSession(best.session);
+    }
     return;
   }
 
@@ -161,6 +178,7 @@ async function cmdLookup(args: string[]): Promise<void> {
     console.log(
       "Tip: re-run `pr-session index`, or add a stamp on future PRs.",
     );
+    if (shouldOpen) process.exit(3);
     return;
   }
   for (const link of links) {
@@ -169,10 +187,14 @@ async function cmdLookup(args: string[]): Promise<void> {
       console.log("  (local transcript — author machine only)");
     }
   }
+  if (shouldOpen) {
+    launchSession(links[0].session);
+  }
 }
 
 async function cmdSession(args: string[]): Promise<void> {
   const asJson = args.includes("--json");
+  const shouldOpen = args.includes("--open");
   const raw = positionalArgs(args)[0];
   if (!raw) {
     console.error("session requires <agent>/<id> or <id>");
@@ -194,7 +216,25 @@ async function cmdSession(args: string[]): Promise<void> {
   const links = resolvePrsForSession(index, agent, sessionId);
 
   if (asJson) {
-    console.log(JSON.stringify({ session, prs: links }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          session,
+          prs: links,
+          open: session ? sessionOpenLinks(session) : undefined,
+          launch: session ? sessionLaunch(session) : undefined,
+        },
+        null,
+        2,
+      ),
+    );
+    if (shouldOpen) {
+      if (!session) {
+        console.error("Session not in index; cannot open.");
+        process.exit(3);
+      }
+      launchSession(session);
+    }
     return;
   }
 
@@ -205,17 +245,28 @@ async function cmdSession(args: string[]): Promise<void> {
     if (session.transcriptPath) console.log(`  ${session.transcriptPath}`);
     if (session.cloudUrl) console.log(`  cloud ${session.cloudUrl}`);
     if (session.branch) console.log(`  branch ${session.branch}`);
+    const open = sessionOpenLinks(session);
+    if (open.resumeCommand) console.log(`  resume ${open.resumeCommand}`);
+    if (open.openUrl) console.log(`  open ${open.openUrl}`);
   } else {
     console.log(`Session ${raw} not in index (showing linked PRs only).`);
   }
 
   if (!links.length) {
     console.log("No linked PRs.");
-    return;
+  } else {
+    console.log("\nPRs:");
+    for (const link of links) {
+      console.log(`- ${link.pr.url} (${link.confidence}, ${link.reason})`);
+    }
   }
-  console.log("\nPRs:");
-  for (const link of links) {
-    console.log(`- ${link.pr.url} (${link.confidence}, ${link.reason})`);
+
+  if (shouldOpen) {
+    if (!session) {
+      console.error("Session not in index; cannot open.");
+      process.exit(3);
+    }
+    launchSession(session);
   }
 }
 
@@ -272,21 +323,7 @@ async function cmdOpen(args: string[]): Promise<void> {
     console.error("No session match to open.");
     process.exit(3);
   }
-  const open = sessionOpenLinks(best.session);
-  if (open.openUrl) {
-    console.log(open.openUrl);
-    tryOpen(open.openUrl);
-    return;
-  }
-  const p = best.session.transcriptPath;
-  if (!p || !fs.existsSync(p)) {
-    console.error(
-      `Matched ${best.session.agent}:${best.session.sessionId} but transcript missing.`,
-    );
-    process.exit(3);
-  }
-  console.log(p);
-  tryOpen(p);
+  launchSession(best.session);
 }
 
 async function cmdStats(): Promise<void> {
@@ -384,6 +421,46 @@ function positionalArgs(args: string[]): string[] {
     out.push(a);
   }
   return out;
+}
+
+/** Resume / open the interactive session (claude/codex command, Cursor deeplink, or transcript). */
+function launchSession(session: SessionRecord): void {
+  const action = sessionLaunch(session);
+  if (!action) {
+    console.error(
+      `Matched ${session.agent}:${session.sessionId} but have no resume/open action.`,
+    );
+    process.exit(3);
+  }
+
+  if (action.kind === "command") {
+    console.log(action.command);
+    if (process.env.PR_SESSION_NO_OPEN) return;
+    const result = spawnSync(action.command, {
+      shell: true,
+      stdio: "inherit",
+    });
+    if (result.error) {
+      console.error(result.error.message);
+      process.exit(1);
+    }
+    process.exit(result.status ?? 1);
+  }
+
+  if (action.kind === "url") {
+    console.log(action.url);
+    tryOpen(action.url);
+    return;
+  }
+
+  if (!fs.existsSync(action.path)) {
+    console.error(
+      `Matched ${session.agent}:${session.sessionId} but transcript missing.`,
+    );
+    process.exit(3);
+  }
+  console.log(action.path);
+  tryOpen(action.path);
 }
 
 function tryOpen(target: string): void {

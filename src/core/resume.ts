@@ -81,6 +81,35 @@ export function sessionOpenLinks(session: SessionRecord): SessionOpenLinks {
   return { resumeCommand, viewUrl, openUrl, notes };
 }
 
+/**
+ * Best action to put the user back in the interactive session.
+ *
+ * Preference: CLI resume (`claude --resume` / `codex resume`) → app/URL deeplink
+ * → transcript path. Cursor’s `cursor <cwd>` is display-only (does not select the
+ * chat), so local Cursor uses the agent deeplink instead.
+ */
+export type SessionLaunch =
+  | { kind: "command"; command: string }
+  | { kind: "url"; url: string }
+  | { kind: "path"; path: string };
+
+export function sessionLaunch(session: SessionRecord): SessionLaunch | undefined {
+  const links = sessionOpenLinks(session);
+  if (
+    (session.agent === "claude" || session.agent === "codex") &&
+    links.resumeCommand
+  ) {
+    return { kind: "command", command: links.resumeCommand };
+  }
+  if (links.openUrl) {
+    return { kind: "url", url: links.openUrl };
+  }
+  if (session.transcriptPath) {
+    return { kind: "path", path: session.transcriptPath };
+  }
+  return undefined;
+}
+
 /** OS-registered `cursor://` deeplink that jumps to an agent by id (Glass). */
 export function cursorAgentDesktopDeeplink(agentId: string): string {
   return `cursor://anysphere.cursor-deeplink/agent?id=${encodeURIComponent(agentId)}`;

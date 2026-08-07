@@ -11,6 +11,7 @@ import {
   preferSession,
   resolvePrsForSession,
   resolveSessionsForPr,
+  sessionLaunch,
   sessionOpenLinks,
   stampToken,
   validateIndex,
@@ -425,5 +426,36 @@ describe("sessionOpenLinks", () => {
     );
     assert.equal(links.viewUrl, "file:///tmp/t.jsonl");
     assert.ok(links.notes.some((n) => /Agents window/i.test(n)));
+  });
+});
+
+describe("sessionLaunch", () => {
+  it("prefers Claude resume command over transcript path", () => {
+    const launch = sessionLaunch({
+      agent: "claude",
+      sessionId: "abc-123",
+      visibility: "local",
+      cwd: "/Users/you/github/joinera",
+      transcriptPath: "/tmp/t.jsonl",
+    });
+    assert.deepEqual(launch, {
+      kind: "command",
+      command: "cd /Users/you/github/joinera && claude --resume abc-123",
+    });
+  });
+
+  it("uses Cursor agent deeplink for local Agent IDs", () => {
+    const id = "3b66e79d-cf6f-445a-aa7f-df5094f26b06";
+    const launch = sessionLaunch({
+      agent: "cursor",
+      sessionId: id,
+      visibility: "local",
+      cwd: "/Users/you/github/joinera",
+      transcriptPath: "/tmp/t.jsonl",
+    });
+    assert.deepEqual(launch, {
+      kind: "url",
+      url: `cursor://anysphere.cursor-deeplink/agent?id=${id}`,
+    });
   });
 });

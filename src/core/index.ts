@@ -39,10 +39,12 @@ export {
 export { detectAgentFingerprints } from "./fingerprints.js";
 
 export {
-  pathToFileUrl,
-  sessionOpenLinks,
   cursorAgentDesktopDeeplink,
   cursorCloudAgentDesktopDeeplink,
+  pathToFileUrl,
+  sessionLaunch,
+  sessionOpenLinks,
   shellQuote,
+  type SessionLaunch,
   type SessionOpenLinks,
 } from "./resume.js";
