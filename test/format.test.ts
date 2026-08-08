@@ -73,6 +73,27 @@ describe("formatLinkRows", () => {
     );
   });
 
+  it("extends shared prefixes until compact ids are unique", () => {
+    const sameMillisecond = [
+      link({
+        sessionId: "019dd167-41ab-7750-a8cc-735529f9ac7f",
+        confidence: "high",
+      }),
+      link({
+        sessionId: "019dd167-41e2-7173-9658-2a840d7ff8b7",
+        confidence: "high",
+      }),
+      link({
+        sessionId: "019dd167-4227-7d81-ac13-734a1e60b4f8",
+        confidence: "high",
+      }),
+    ];
+    const out = formatLinkRows(sameMillisecond, { now: NOW });
+    assert.match(out, /claude:019dd167-41a/);
+    assert.match(out, /claude:019dd167-41e/);
+    assert.match(out, /claude:019dd167-42/);
+  });
+
   it("strips control characters from transcript-derived fields", () => {
     const hostile = [
       link({

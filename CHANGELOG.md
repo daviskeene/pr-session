@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Spawned Codex subagents are grouped under their parent session in PR lookups and hidden from `list` by default; `--include-subagents` restores the individual child threads
+- Compact lookup rows extend session-id prefixes past eight characters when needed to distinguish otherwise identical-looking matches
 - `pr-session open` (and `lookup` / `session --open`) resume the interactive session: Claude/Codex CLI resume commands, Cursor agent deeplinks, transcript file only as fallback
 - Duplicate-session merging is unified in one field-wise `mergeSessions` (score-based winner, gap backfill, timestamp union) shared by all indexers and `finalizeIndex`
 - Agent kinds have a single source of truth (`AGENT_KINDS` in `pr-session/types`) — stamp regexes, CLI validation, and store validation all derive from it

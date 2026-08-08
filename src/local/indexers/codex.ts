@@ -113,6 +113,7 @@ async function scanCodexFile(
   let cwd: string | undefined;
   let branch: string | undefined;
   let repo: string | undefined;
+  let parentSessionId: string | undefined;
   let startedAt: string | undefined;
   let updatedAt: string | undefined;
   let title: string | undefined;
@@ -157,6 +158,15 @@ async function scanCodexFile(
       const p = obj.payload;
       if (typeof p.id === "string") sessionId = p.id;
       if (typeof p.cwd === "string") cwd = p.cwd;
+      const source = p.source as
+        | {
+            subagent?: {
+              thread_spawn?: { parent_thread_id?: unknown };
+            };
+          }
+        | undefined;
+      const parent = source?.subagent?.thread_spawn?.parent_thread_id;
+      if (typeof parent === "string" && parent) parentSessionId = parent;
       if (typeof p.timestamp === "string") {
         startedAt = p.timestamp;
       }
@@ -180,6 +190,7 @@ async function scanCodexFile(
         const session = upsertSession(sessions, {
           agent: "codex",
           sessionId,
+          parentSessionId,
           transcriptPath: file,
           visibility: "local",
           cwd,
@@ -211,6 +222,7 @@ async function scanCodexFile(
   upsertSession(sessions, {
     agent: "codex",
     sessionId,
+    parentSessionId,
     transcriptPath: file,
     visibility: "local",
     cwd,

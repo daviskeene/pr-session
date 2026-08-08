@@ -34,6 +34,8 @@ export interface PrRef {
 export interface SessionRecord {
   agent: AgentKind;
   sessionId: string;
+  /** Parent session for agent-spawned child threads, when known. */
+  parentSessionId?: string;
   /** Absolute path to the primary transcript / rollout file, if local. */
   transcriptPath?: string;
   /** Cloud / shareable URL when the session is not machine-local. */
@@ -97,6 +99,8 @@ export interface ResolveOptions {
   minConfidence?: MatchConfidence;
   /** Include heuristic matches (default true). */
   heuristic?: boolean;
+  /** Return child-agent sessions separately instead of grouping them under their parent. */
+  includeSubagents?: boolean;
 }
 
 export interface StampInput {

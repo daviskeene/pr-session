@@ -37,13 +37,21 @@ export function resolveSessionsForPr(
   const key = prKey(pr);
   const out: LinkRecord[] = [];
   const seen = new Set<string>();
+  const sessionsById = new Map(
+    index.sessions.map((s) => [`${s.agent}:${s.sessionId}`, s]),
+  );
 
   const push = (link: LinkRecord) => {
     if (!confidenceAtLeast(link.confidence, min)) return;
-    const sk = `${link.session.agent}:${link.session.sessionId}:${link.reason}`;
+    const session = options.includeSubagents
+      ? link.session
+      : rootSession(link.session, sessionsById);
+    if (!session) return;
+    const grouped = session === link.session ? link : { ...link, session };
+    const sk = `${session.agent}:${session.sessionId}:${link.reason}`;
     if (seen.has(sk)) return;
     seen.add(sk);
-    out.push(link);
+    out.push(grouped);
   };
 
   const pushStamp = (stamp: { agent: AgentKind; sessionId: string }) => {
@@ -153,6 +161,27 @@ export function resolveSessionsForPr(
   return sortLinks(dedupeBestBySession(out));
 }
 
+/** Resolve a child thread to its outermost indexed parent. */
+function rootSession(
+  session: SessionRecord,
+  sessionsById: Map<string, SessionRecord>,
+): SessionRecord | undefined {
+  let current = session;
+  const seen = new Set<string>();
+  while (current.parentSessionId) {
+    const key = `${current.agent}:${current.sessionId}`;
+    if (seen.has(key)) return undefined;
+    seen.add(key);
+    const parent = sessionsById.get(
+      `${current.agent}:${current.parentSessionId}`,
+    );
+    // A known child without an indexed parent stays hidden by default.
+    if (!parent) return undefined;
+    current = parent;
+  }
+  return current;
+}
+
 export function resolvePrsForSession(
   index: SessionIndex,
   agent: SessionRecord["agent"] | undefined,
@@ -248,6 +277,8 @@ export interface ListFilters {
   /** ISO timestamp lower bound on updatedAt (or startedAt as fallback). */
   since?: string;
   limit?: number;
+  /** Include agent-spawned child sessions (default false). */
+  includeSubagents?: boolean;
 }
 
 /** Filter + sort the indexed sessions, most recently active first. */
@@ -260,6 +291,7 @@ export function listSessions(
   // sort chronologically against "Z"-normalized ones.
   const sinceEpoch = filters.since ? toEpoch(filters.since) : null;
   const out = index.sessions.filter((s) => {
+    if (!filters.includeSubagents && s.parentSessionId) return false;
     if (filters.agent && s.agent !== filters.agent) return false;
     if (repoFilter && !matchesRepoFilter(s, repoFilter)) return false;
     if (sinceEpoch != null) {

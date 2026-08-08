@@ -44,17 +44,17 @@ Worked stamp and lookup samples live in `[examples/](examples/)`.
 
 ```bash
 pr-session index [--json] [--full]
-pr-session lookup <pr> [--json] [--open] [--n <k>] [--verbose] [--min exact|high|medium|low] [--no-heuristic]
-pr-session list [--repo <owner/repo|name>] [--agent <claude|codex|cursor>] [--since <7d|24h|ISO>] [--limit <n>] [--json]
+pr-session lookup <pr> [--json] [--open] [--n <k>] [--verbose] [--min exact|high|medium|low] [--no-heuristic] [--include-subagents]
+pr-session list [--repo <owner/repo|name>] [--agent <claude|codex|cursor>] [--since <7d|24h|ISO>] [--limit <n>] [--json] [--include-subagents]
 pr-session session <agent/id|id> [--json] [--open]   # id may be a unique prefix (≥6 chars)
 pr-session stamp --agent <claude|codex|cursor> --id <sessionId> \
   [--cloud-url <url>] [--title <t>] [--trailers|--token]
-pr-session open <pr> [--n <k>]   # resume/open a match; PR_SESSION_NO_OPEN=1 to print only
+pr-session open <pr> [--n <k>] [--include-subagents]   # resume/open a match; PR_SESSION_NO_OPEN=1 to print only
 pr-session stats
 pr-session help
 ```
 
-`<pr>` can be a GitHub URL, `owner/repo#123`, or a bare number (which uses `gh` against the current repo). `--min exact` returns only exact links, and `--no-heuristic` drops branch, time, and fingerprint matching.
+`<pr>` can be a GitHub URL, `owner/repo#123`, or a bare number (which uses `gh` against the current repo). `--min exact` returns only exact links, and `--no-heuristic` drops branch, time, and fingerprint matching. Spawned subagent threads are grouped under their outermost indexed parent by default; pass `--include-subagents` to show them separately.
 
 `index` keeps a scan cache at `~/.pr-session/cache.json`, so re-runs only read transcripts that changed. `--full` ignores the cache.
 

@@ -55,11 +55,11 @@ const HELP = `pr-session — map GitHub PRs ↔ Claude Code / Codex / Cursor ses
 
 Usage:
   pr-session index [--json] [--full]   # --full ignores the scan cache
-  pr-session lookup <pr> [--json] [--open] [--n <k>] [--verbose] [--min exact|high|medium|low] [--no-heuristic]
-  pr-session list [--repo <owner/repo|name>] [--agent <a>] [--since <7d|24h|ISO>] [--limit <n>] [--json]
+  pr-session lookup <pr> [--json] [--open] [--n <k>] [--verbose] [--min exact|high|medium|low] [--no-heuristic] [--include-subagents]
+  pr-session list [--repo <owner/repo|name>] [--agent <a>] [--since <7d|24h|ISO>] [--limit <n>] [--json] [--include-subagents]
   pr-session session <agent/id|id> [--json] [--open]   # id may be a unique prefix (≥6 chars)
   pr-session stamp --agent <claude|codex|cursor> --id <sessionId> [--cloud-url <url>] [--title <t>]
-  pr-session open <pr> [--n <k>]  # resume/open a match (best by default; --n picks by number)
+  pr-session open <pr> [--n <k>] [--include-subagents]  # resume/open a match (best by default; --n picks by number)
   pr-session stats
   pr-session help
 
@@ -144,6 +144,7 @@ async function cmdLookup(args: string[]): Promise<void> {
   const nRaw = flagValue(args, "--n");
   const shouldOpen = args.includes("--open") || nRaw !== undefined;
   const noHeuristic = args.includes("--no-heuristic");
+  const includeSubagents = args.includes("--include-subagents");
   const min = parseMin(flagValue(args, "--min") ?? "low");
   const input = positionalArgs(args)[0];
   if (!input) {
@@ -167,7 +168,11 @@ async function cmdLookup(args: string[]): Promise<void> {
       updatedAt: meta.updatedAt,
       commits: meta.commits,
     },
-    { minConfidence: min, heuristic: !noHeuristic },
+    {
+      minConfidence: min,
+      heuristic: !noHeuristic,
+      includeSubagents,
+    },
   );
 
   if (asJson) {
@@ -272,6 +277,7 @@ async function cmdList(args: string[]): Promise<void> {
   const repo = flagValue(args, "--repo");
   const sinceRaw = flagValue(args, "--since");
   const limitRaw = flagValue(args, "--limit");
+  const includeSubagents = args.includes("--include-subagents");
 
   let agent: AgentKind | undefined;
   if (agentRaw !== undefined) {
@@ -293,7 +299,13 @@ async function cmdList(args: string[]): Promise<void> {
 
   const since = sinceRaw !== undefined ? parseSince(sinceRaw) : undefined;
   const index = loadIndex();
-  const sessions = listSessions(index, { agent, repo, since, limit });
+  const sessions = listSessions(index, {
+    agent,
+    repo,
+    since,
+    limit,
+    includeSubagents,
+  });
 
   if (asJson) {
     console.log(
@@ -470,6 +482,7 @@ async function cmdStamp(args: string[]): Promise<void> {
 async function cmdOpen(args: string[]): Promise<void> {
   const input = positionalArgs(args)[0];
   const nRaw = flagValue(args, "--n");
+  const includeSubagents = args.includes("--include-subagents");
   if (!input) {
     console.error("open requires a PR reference");
     process.exit(2);
@@ -479,13 +492,18 @@ async function cmdOpen(args: string[]): Promise<void> {
   if (ghWarning) {
     process.stderr.write(`pr-session: ${ghWarning}\n`);
   }
-  const links = resolveSessionsForPr(index, meta.ref, {
-    body: meta.body,
-    headBranch: meta.headBranch,
-    createdAt: meta.createdAt,
-    updatedAt: meta.updatedAt,
-    commits: meta.commits,
-  });
+  const links = resolveSessionsForPr(
+    index,
+    meta.ref,
+    {
+      body: meta.body,
+      headBranch: meta.headBranch,
+      createdAt: meta.createdAt,
+      updatedAt: meta.updatedAt,
+      commits: meta.commits,
+    },
+    { includeSubagents },
+  );
   if (!links.length) {
     console.error("No session match to open.");
     process.exit(3);

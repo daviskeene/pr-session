@@ -174,6 +174,74 @@ describe("resolveSessionsForPr", () => {
     assert.equal(links.length, 1);
     assert.equal(links[0].confidence, "exact");
   });
+
+  it("groups spawned subagents under their parent by default", () => {
+    const parent: SessionRecord = {
+      agent: "codex",
+      sessionId: "parent",
+      visibility: "local",
+      repo: "joinhandshake/joinera",
+    };
+    const child: SessionRecord = {
+      agent: "codex",
+      sessionId: "child",
+      parentSessionId: "parent",
+      visibility: "local",
+      repo: "joinhandshake/joinera",
+      commits: ["aaaa1111"],
+    };
+    const groupedIndex: SessionIndex = {
+      version: 1,
+      builtAt: "2026-08-08T00:00:00.000Z",
+      sessions: [parent, child],
+      links: [],
+    };
+    const pr = {
+      owner: "joinhandshake",
+      repo: "joinera",
+      number: 101,
+      url: "https://github.com/joinhandshake/joinera/pull/101",
+    };
+    const meta = {
+      commits: [{ sha: "aaaa1111bbbb2222cccc3333dddd4444eeee5555" }],
+    };
+
+    const grouped = resolveSessionsForPr(groupedIndex, pr, meta);
+    assert.deepEqual(grouped.map((l) => l.session.sessionId), ["parent"]);
+
+    const separate = resolveSessionsForPr(groupedIndex, pr, meta, {
+      includeSubagents: true,
+    });
+    assert.deepEqual(separate.map((l) => l.session.sessionId), ["child"]);
+  });
+
+  it("hides a spawned subagent when its parent is not indexed", () => {
+    const child: SessionRecord = {
+      agent: "codex",
+      sessionId: "orphan-child",
+      parentSessionId: "missing-parent",
+      visibility: "local",
+      repo: "joinhandshake/joinera",
+      branch: "feature/x",
+    };
+    const orphanIndex: SessionIndex = {
+      version: 1,
+      builtAt: "2026-08-08T00:00:00.000Z",
+      sessions: [child],
+      links: [],
+    };
+    const links = resolveSessionsForPr(
+      orphanIndex,
+      {
+        owner: "joinhandshake",
+        repo: "joinera",
+        number: 102,
+        url: "https://github.com/joinhandshake/joinera/pull/102",
+      },
+      { headBranch: "feature/x" },
+    );
+    assert.equal(links.length, 0);
+  });
 });
 
 describe("commit-sha matching", () => {
@@ -362,6 +430,14 @@ describe("listSessions", () => {
         repo: "acme/widgets",
         updatedAt: "2026-08-05T00:00:00.000Z",
       },
+      {
+        agent: "codex",
+        sessionId: "child",
+        parentSessionId: "recent",
+        visibility: "local",
+        repo: "acme/demo",
+        updatedAt: "2026-08-07T00:00:00.000Z",
+      },
     ],
     links: [],
   };
@@ -395,6 +471,14 @@ describe("listSessions", () => {
     assert.deepEqual(
       listSessions(index, { limit: 1 }).map((s) => s.sessionId),
       ["recent"],
+    );
+  });
+
+  it("hides subagents by default and includes them on request", () => {
+    assert.ok(!listSessions(index).some((s) => s.sessionId === "child"));
+    assert.equal(
+      listSessions(index, { includeSubagents: true })[0].sessionId,
+      "child",
     );
   });
 
@@ -608,6 +692,26 @@ describe("validateIndex", () => {
           "t",
         ),
       /agent/,
+    );
+    assert.throws(
+      () =>
+        validateIndex(
+          {
+            version: 1,
+            builtAt: "now",
+            sessions: [
+              {
+                agent: "codex",
+                sessionId: "x",
+                parentSessionId: 42,
+                visibility: "local",
+              },
+            ],
+            links: [],
+          },
+          "t",
+        ),
+      /parentSessionId/,
     );
   });
 

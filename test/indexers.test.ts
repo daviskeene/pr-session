@@ -117,6 +117,42 @@ describe("indexCodex (fixtures)", () => {
     );
   });
 
+  it("records the parent session for spawned subagents", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pr-session-codex-"));
+    fs.writeFileSync(
+      path.join(
+        root,
+        "rollout-2026-08-01T10-00-00-018f9999-0000-7000-8000-000000000010.jsonl",
+      ),
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-08-01T10:00:00.000Z",
+        payload: {
+          id: "018f9999-0000-7000-8000-000000000010",
+          cwd: "/Users/dev/github/demo",
+          source: {
+            subagent: {
+              thread_spawn: {
+                parent_thread_id:
+                  "018f9999-0000-7000-8000-000000000001",
+                depth: 1,
+              },
+            },
+          },
+        },
+      }) + "\n",
+    );
+
+    const { sessions } = await indexCodex({
+      sessionsRoot: root,
+      archivedRoot: path.join(root, "none"),
+    });
+    assert.equal(
+      sessions[0].parentSessionId,
+      "018f9999-0000-7000-8000-000000000001",
+    );
+  });
+
   it("does not let a sparse archived copy clobber session metadata", async () => {
     // Regression: the archived mirror lacks session_meta; merging it must not
     // wipe branch/repo/cwd, and the time range must span both copies.

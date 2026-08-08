@@ -74,6 +74,7 @@ function sessionScore(s: SessionRecord): number {
 }
 
 const BACKFILL_FIELDS = [
+  "parentSessionId",
   "transcriptPath",
   "cloudUrl",
   "cwd",
@@ -207,6 +208,15 @@ export function validateIndex(
     if (typeof session.sessionId !== "string" || !session.sessionId) {
       throw new Error(
         `Invalid index at ${filePath}: sessions[${i}].sessionId`,
+      );
+    }
+    if (
+      session.parentSessionId !== undefined &&
+      (typeof session.parentSessionId !== "string" ||
+        !session.parentSessionId)
+    ) {
+      throw new Error(
+        `Invalid index at ${filePath}: sessions[${i}].parentSessionId`,
       );
     }
     if (session.visibility !== "local" && session.visibility !== "cloud") {

@@ -53,12 +53,15 @@ export function formatLinkRows(
   links: LinkRecord[],
   opts: { color?: boolean; now?: Date } = {},
 ): string {
+  const shortIds = links.map((link) =>
+    shortestUniqueIdPrefix(link, links),
+  );
   const rows = links.map((link, i) => {
     const s = link.session;
     return {
       n: String(i + 1),
       confidence: link.confidence,
-      who: `${s.agent}:${sanitizeText(s.sessionId).slice(0, 8)}`,
+      who: `${s.agent}:${shortIds[i]}`,
       where: truncate(sanitizeText(s.branch || s.repo || ""), 26),
       when: formatWhen(s.updatedAt || s.startedAt, opts.now),
       title: s.title ? sanitizeText(s.title) : undefined,
@@ -82,6 +85,27 @@ export function formatLinkRows(
     }
   }
   return lines.join("\n");
+}
+
+/** Use at least 8 characters, extending only enough to distinguish rows. */
+function shortestUniqueIdPrefix(
+  link: LinkRecord,
+  links: LinkRecord[],
+): string {
+  const id = sanitizeText(link.session.sessionId);
+  let length = Math.min(8, id.length);
+  while (
+    length < id.length &&
+    links.some(
+      (other) =>
+        other !== link &&
+        other.session.agent === link.session.agent &&
+        sanitizeText(other.session.sessionId).startsWith(id.slice(0, length)),
+    )
+  ) {
+    length += 1;
+  }
+  return id.slice(0, length);
 }
 
 /** Parse a picker reply: 1-based match number in range, else null (skip). */
