@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
@@ -8,6 +10,7 @@ import {
   decodeCursorProjectDir,
   indexCursor,
 } from "../src/local/indexers/cursor.js";
+import { harvestCommitShas } from "../src/local/indexers/commits.js";
 import { mergeSessions } from "../src/local/store.js";
 import type { SessionRecord } from "../src/core/types.js";
 
@@ -71,13 +74,47 @@ describe("indexCodex (fixtures)", () => {
     assert.equal(s.cwd, "/Users/dev/github/demo");
     assert.equal(s.branch, "feature/login");
     assert.equal(s.repo, "acme/demo");
-    assert.deepEqual(s.commits, [
-      "aaaa1111bbbb2222cccc3333dddd4444eeee5555",
-    ]);
+    // Only commits created in-session (git stdout pattern) are harvested;
+    // session_meta.commit_hash is the starting HEAD, not session work.
+    assert.deepEqual(s.commits, ["bbbb2222"]);
 
     assert.equal(links.length, 1);
     assert.equal(links[0].reason, "transcript-mention");
     assert.equal(links[0].pr.number, 7);
+  });
+
+  it("harvests commit SHAs past the deep-scan window", async () => {
+    // Commits usually happen late in a session; the regex-only tail scan
+    // must still catch them after line 200.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pr-session-codex-"));
+    const lines = [
+      `{"type":"session_meta","timestamp":"2026-08-01T10:00:00.000Z","payload":{"id":"018f9999-0000-7000-8000-000000000009","cwd":"/Users/dev/github/demo","git":{"branch":"feat/x","repository_url":"https://github.com/acme/demo.git"}}}`,
+    ];
+    for (let i = 0; i < 260; i++) {
+      lines.push(
+        `{"type":"response_item","timestamp":"2026-08-01T10:0${i % 10}:00.000Z","payload":{"type":"message","text":"filler ${i}"}}`,
+      );
+    }
+    lines.push(
+      `{"type":"response_item","timestamp":"2026-08-01T11:00:00.000Z","payload":{"type":"message","text":"[feat/x cafe1234] late commit"}}`,
+    );
+    fs.writeFileSync(
+      path.join(
+        root,
+        "rollout-2026-08-01T10-00-00-018f9999-0000-7000-8000-000000000009.jsonl",
+      ),
+      lines.join("\n") + "\n",
+    );
+
+    const { sessions } = await indexCodex({
+      sessionsRoot: root,
+      archivedRoot: path.join(root, "none"),
+    });
+    assert.equal(sessions.length, 1);
+    assert.ok(
+      sessions[0].commits?.includes("cafe1234"),
+      "late commit harvested by tail scan",
+    );
   });
 
   it("does not let a sparse archived copy clobber session metadata", async () => {
@@ -152,6 +189,18 @@ describe("decodeCursorProjectDir", () => {
     assert.deepEqual(decodeCursorProjectDir("scratch"), {
       repoGuess: "scratch",
     });
+  });
+});
+
+describe("harvestCommitShas", () => {
+  it("requires git's full [branch sha] bracket shape", () => {
+    const got = new Set<string>();
+    harvestCommitShas("[master abc1234] add thing", got);
+    harvestCommitShas("[feat/x (root-commit) cafe9999] init", got);
+    harvestCommitShas("stray (deadbee] fragment", got);
+    harvestCommitShas("bare deadbeef token", got);
+    harvestCommitShas("[no-sha-here]", got);
+    assert.deepEqual([...got].sort(), ["abc1234", "cafe9999"]);
   });
 });
 

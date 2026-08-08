@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Codex indexer no longer clobbers session metadata (branch/repo/cwd) with `undefined` when the same session appears in both `sessions/` and `archived_sessions/`
 
+### Security / matching hardening (adversarial review)
+
+- Codex `session_meta.git.commit_hash` (the HEAD at session start, not session work) is no longer harvested — only commits actually created in-session match
+- Codex scanning continues past the deep-scan window with a cheap regex-only tail, so late-session commits are still harvested (they usually happen late)
+- `commit-sha` matches are gated on repository identity — the same SHA in a fork/mirror session no longer matches
+- Commit-stdout harvesting requires git's full `[branch sha]` bracket shape
+- `Agent-Session:` trailers are read only from a commit message's final paragraph, per git trailer semantics — quoted examples earlier in the body don't count
+- Transcript-derived text (titles, branches, ids) is stripped of C0/C1 control characters before terminal display, blocking ANSI/OSC injection
+- `list --since` and session ordering compare parsed instants, so offset ISO timestamps (`+02:00`) sort chronologically
+
 ## [0.1.0] — 2026-08-07
 
 ### Added

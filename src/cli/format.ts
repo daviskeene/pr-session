@@ -37,6 +37,15 @@ function truncate(text: string, max: number): string {
 }
 
 /**
+ * Strip C0/C1 control characters from transcript-derived text so a hostile
+ * title/branch can't inject ANSI/OSC sequences into the terminal.
+ */
+export function sanitizeText(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, " ");
+}
+
+/**
  * Compact numbered match rows: confidence, agent:short-id, branch/repo,
  * last-active — with the session title dimmed underneath when known.
  */
@@ -49,10 +58,10 @@ export function formatLinkRows(
     return {
       n: String(i + 1),
       confidence: link.confidence,
-      who: `${s.agent}:${s.sessionId.slice(0, 8)}`,
-      where: truncate(s.branch || s.repo || "", 26),
+      who: `${s.agent}:${sanitizeText(s.sessionId).slice(0, 8)}`,
+      where: truncate(sanitizeText(s.branch || s.repo || ""), 26),
       when: formatWhen(s.updatedAt || s.startedAt, opts.now),
-      title: s.title,
+      title: s.title ? sanitizeText(s.title) : undefined,
     };
   });
   const whoWidth = Math.max(...rows.map((r) => r.who.length));
@@ -92,7 +101,7 @@ export function formatLinkForCli(link: LinkRecord): string {
   const links = sessionOpenLinks(s);
   const parts = [
     `${link.confidence.padEnd(6)} ${link.reason}`,
-    `${s.agent}:${s.sessionId}`,
+    `${s.agent}:${sanitizeText(s.sessionId)}`,
   ];
 
   if (links.openUrl) {

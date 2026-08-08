@@ -72,6 +72,22 @@ describe("formatLinkRows", () => {
       /\x1b\[32m/,
     );
   });
+
+  it("strips control characters from transcript-derived fields", () => {
+    const hostile = [
+      link({
+        sessionId: "evil-session",
+        confidence: "exact",
+        branch: "main\x1b[2J",
+        updatedAt: "2026-08-07T22:00:00.000Z",
+        title: "innocent\x1b]0;pwned\x07 title\x9b31m",
+      }),
+    ];
+    const out = formatLinkRows(hostile, { now: NOW });
+    // \n between row and title line is structural; everything else is banned.
+    assert.doesNotMatch(out, /[\x00-\x09\x0b-\x1f\x7f-\x9f]/);
+    assert.match(out, /innocent/);
+  });
 });
 
 describe("formatWhen", () => {

@@ -41,14 +41,21 @@ export function extractStampTokens(
 
 const STAMP_TRAILER_SOURCE = `^Agent-Session:\\s*(${AGENT_KINDS.join("|")})\\/([A-Za-z0-9._:-]+)\\s*$`;
 
-/** Parse `Agent-Session: <agent>/<id>` git trailers (the ones buildStamp emits). */
+/**
+ * Parse `Agent-Session: <agent>/<id>` git trailers (the ones buildStamp
+ * emits). Per git trailer semantics only the message's final paragraph is
+ * scanned, so quoted examples or code blocks earlier in the body don't
+ * resolve as attribution.
+ */
 export function extractStampTrailers(
   text: string,
 ): Array<{ agent: AgentKind; sessionId: string }> {
+  const paragraphs = text.trimEnd().split(/\n[ \t]*\n/);
+  const block = paragraphs[paragraphs.length - 1] ?? "";
   const out: Array<{ agent: AgentKind; sessionId: string }> = [];
   const re = new RegExp(STAMP_TRAILER_SOURCE, "gim");
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
+  while ((m = re.exec(block))) {
     out.push({ agent: m[1].toLowerCase() as AgentKind, sessionId: m[2] });
   }
   return out;

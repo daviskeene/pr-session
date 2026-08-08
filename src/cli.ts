@@ -14,6 +14,7 @@ import {
   formatLinkForCli,
   formatLinkRows,
   parsePickerAnswer,
+  sanitizeText,
 } from "./cli/format.js";
 import {
   AGENT_KINDS,
@@ -315,11 +316,14 @@ async function cmdList(args: string[]): Promise<void> {
   }
   for (const session of sessions) {
     const when = (session.updatedAt || session.startedAt || "").slice(0, 16);
-    const where = [session.repo, session.branch].filter(Boolean).join(" @ ");
+    const where = [session.repo, session.branch]
+      .filter((v): v is string => !!v)
+      .map(sanitizeText)
+      .join(" @ ");
     console.log(
-      `- ${session.agent}:${session.sessionId}${when ? ` (${when})` : ""}${where ? ` ${where}` : ""}`,
+      `- ${session.agent}:${sanitizeText(session.sessionId)}${when ? ` (${when})` : ""}${where ? ` ${where}` : ""}`,
     );
-    if (session.title) console.log(`    ${session.title}`);
+    if (session.title) console.log(`    ${sanitizeText(session.title)}`);
     const open = sessionOpenLinks(session);
     if (open.resumeCommand) console.log(`    resume ${open.resumeCommand}`);
     else if (open.openUrl) console.log(`    open ${open.openUrl}`);

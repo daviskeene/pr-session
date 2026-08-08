@@ -191,6 +191,7 @@ describe("commit-sha matching", () => {
         agent: "codex",
         sessionId: "sess-commit",
         visibility: "local",
+        repo: "acme/demo",
         commits: ["aaaa1111"],
       },
       {
@@ -198,6 +199,14 @@ describe("commit-sha matching", () => {
         sessionId: "sess-other",
         visibility: "local",
         commits: ["ffff0000"],
+      },
+      {
+        // Same commit SHA but a different repo — a fork/mirror, not this PR.
+        agent: "cursor",
+        sessionId: "sess-fork",
+        visibility: "local",
+        repo: "fork/demo",
+        commits: ["aaaa1111"],
       },
     ],
     links: [],
@@ -211,6 +220,16 @@ describe("commit-sha matching", () => {
     assert.equal(links[0].session.sessionId, "sess-commit");
     assert.equal(links[0].confidence, "high");
     assert.equal(links[0].reason, "commit-sha");
+  });
+
+  it("rejects same-SHA matches from a different repo", () => {
+    const links = resolveSessionsForPr(index, pr, {
+      commits: [{ sha: "aaaa1111bbbb2222cccc3333dddd4444eeee5555" }],
+    });
+    assert.ok(
+      !links.some((l) => l.session.sessionId === "sess-fork"),
+      "fork session must not match on commit SHA alone",
+    );
   });
 
   it("resolves Agent-Session trailers in commit messages as exact stamps", () => {
@@ -253,6 +272,20 @@ describe("extractStampTrailers", () => {
     assert.deepEqual(extractStampTrailers(text), [
       { agent: "claude", sessionId: "abc-123" },
       { agent: "cursor", sessionId: "bc-999" },
+    ]);
+  });
+
+  it("only reads the final paragraph, per git trailer semantics", () => {
+    const text = [
+      "Add docs",
+      "",
+      "Example usage:",
+      "Agent-Session: claude/quoted-example",
+      "",
+      "Agent-Session: codex/real-trailer",
+    ].join("\n");
+    assert.deepEqual(extractStampTrailers(text), [
+      { agent: "codex", sessionId: "real-trailer" },
     ]);
   });
 });
@@ -362,6 +395,27 @@ describe("listSessions", () => {
     assert.deepEqual(
       listSessions(index, { limit: 1 }).map((s) => s.sessionId),
       ["recent"],
+    );
+  });
+
+  it("compares offset ISO timestamps chronologically, not lexically", () => {
+    const offsetIndex: SessionIndex = {
+      version: 1,
+      builtAt: "2026-08-07T00:00:00.000Z",
+      sessions: [
+        {
+          agent: "claude",
+          sessionId: "offset",
+          visibility: "local",
+          // 2026-07-31T23:00:00Z — before the filter despite the "08-01" text
+          updatedAt: "2026-08-01T01:00:00+02:00",
+        },
+      ],
+      links: [],
+    };
+    assert.equal(
+      listSessions(offsetIndex, { since: "2026-08-01T00:00:00.000Z" }).length,
+      0,
     );
   });
 });

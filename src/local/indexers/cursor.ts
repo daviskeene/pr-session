@@ -218,8 +218,6 @@ async function scanCursorFile(
         });
       }
     }
-
-    if (lineNo > 400 && title) break;
   }
 
   upsertSession(sessions, {

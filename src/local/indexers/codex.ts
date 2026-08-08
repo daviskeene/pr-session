@@ -20,9 +20,15 @@ import { settleFileScan } from "./safe.js";
  * URLs worth linking appear early; everything after is covered by file mtime.
  * The byte cap is a safety net for pathological files — single rollout lines
  * can be hundreds of KB. Below ~1MB it starts dropping real PR-URL links.
+ *
+ * Past the window the scan keeps streaming but only runs the cheap commit-SHA
+ * regex — commits usually happen late in a session, so stopping entirely
+ * would blind commit-SHA matching for codex. Hard caps bound runaway files.
  */
 const SCAN_WINDOW_LINES = 200;
 const SCAN_WINDOW_BYTES = 1024 * 1024;
+const HARD_CAP_LINES = 200_000;
+const HARD_CAP_BYTES = 512 * 1024 * 1024;
 
 export async function indexCodex(options?: {
   sessionsRoot?: string;
@@ -119,12 +125,17 @@ async function scanCodexFile(
   for await (const line of rl) {
     lineNo += 1;
     bytesSeen += line.length + 1;
-    if (lineNo > SCAN_WINDOW_LINES || bytesSeen > SCAN_WINDOW_BYTES) {
+    if (lineNo > HARD_CAP_LINES || bytesSeen > HARD_CAP_BYTES) {
       truncated = true;
       break;
     }
     if (!line.trim()) continue;
     harvestCommitShas(line, commits);
+    if (lineNo > SCAN_WINDOW_LINES || bytesSeen > SCAN_WINDOW_BYTES) {
+      // Regex-only tail: no JSON.parse past the window.
+      truncated = true;
+      continue;
+    }
     let obj: {
       type?: string;
       timestamp?: string;
@@ -150,16 +161,15 @@ async function scanCodexFile(
         startedAt = p.timestamp;
       }
       const git = p.git as
-        | { branch?: string; repository_url?: string; commit_hash?: string }
+        | { branch?: string; repository_url?: string }
         | undefined;
       if (git?.branch) branch = git.branch;
       if (git?.repository_url) {
         const norm = normalizeRepo(git.repository_url);
         if (norm) repo = `${norm.owner}/${norm.repo}`;
       }
-      if (typeof git?.commit_hash === "string" && git.commit_hash) {
-        commits.add(git.commit_hash.toLowerCase());
-      }
+      // Deliberately NOT harvesting session_meta.git.commit_hash: it is the
+      // repo HEAD when the session started, not work this session produced.
     }
 
     if (obj.type === "response_item") {

@@ -6,7 +6,7 @@ import { homePath } from "./paths.js";
 import { upsertSession } from "./store.js";
 
 /** Bump when scanner output shape or semantics change — old entries are discarded. */
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 
 /** What one transcript file contributes to the index. */
 export interface FileScanResult {

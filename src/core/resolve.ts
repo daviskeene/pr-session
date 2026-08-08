@@ -86,14 +86,18 @@ export function resolveSessionsForPr(
     .filter(Boolean);
   if (prShas.length) {
     for (const session of index.sessions) {
-      if (commitsMatch(session.commits, prShas)) {
-        push({
-          pr,
-          session,
-          confidence: "high",
-          reason: "commit-sha",
-        });
+      if (!commitsMatch(session.commits, prShas)) continue;
+      // Identical commits exist across forks/mirrors — when the session knows
+      // its repo, a SHA hit in a different repo is not this PR's work.
+      if ((session.repo || session.cwd) && !sessionMatchesRepo(session, pr)) {
+        continue;
       }
+      push({
+        pr,
+        session,
+        confidence: "high",
+        reason: "commit-sha",
+      });
     }
   }
 
@@ -252,21 +256,33 @@ export function listSessions(
   filters: ListFilters = {},
 ): SessionRecord[] {
   const repoFilter = filters.repo?.toLowerCase();
+  // Compare parsed instants, not strings — offset ISO forms ("+02:00") don't
+  // sort chronologically against "Z"-normalized ones.
+  const sinceEpoch = filters.since ? toEpoch(filters.since) : null;
   const out = index.sessions.filter((s) => {
     if (filters.agent && s.agent !== filters.agent) return false;
     if (repoFilter && !matchesRepoFilter(s, repoFilter)) return false;
-    if (filters.since) {
-      const t = s.updatedAt || s.startedAt;
-      if (!t || t < filters.since) return false;
+    if (sinceEpoch != null) {
+      const t = toEpoch(s.updatedAt || s.startedAt);
+      if (t == null || t < sinceEpoch) return false;
     }
     return true;
   });
-  out.sort((a, b) =>
-    (b.updatedAt || b.startedAt || "").localeCompare(
-      a.updatedAt || a.startedAt || "",
-    ),
-  );
+  out.sort((a, b) => {
+    const ta = toEpoch(a.updatedAt || a.startedAt);
+    const tb = toEpoch(b.updatedAt || b.startedAt);
+    if (ta != null && tb != null) return tb - ta;
+    if (ta != null) return -1;
+    if (tb != null) return 1;
+    return 0;
+  });
   return filters.limit != null ? out.slice(0, filters.limit) : out;
+}
+
+function toEpoch(iso?: string): number | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? null : t;
 }
 
 function matchesRepoFilter(s: SessionRecord, filter: string): boolean {

@@ -1,3 +1,4 @@
 {"type":"session_meta","timestamp":"2026-08-01T10:00:00.000Z","payload":{"id":"018f0000-0000-7000-8000-000000000001","timestamp":"2026-08-01T10:00:00.000Z","cwd":"/Users/dev/github/demo","git":{"branch":"feature/login","repository_url":"https://github.com/acme/demo.git","commit_hash":"aaaa1111bbbb2222cccc3333dddd4444eeee5555"}}}
 {"type":"response_item","timestamp":"2026-08-01T10:05:00.000Z","payload":{"type":"message","text":"Opened https://github.com/acme/demo/pull/7 for review"}}
+{"type":"response_item","timestamp":"2026-08-01T10:10:00.000Z","payload":{"type":"message","text":"[feature/login bbbb2222] add bell UI\n 3 files changed"}}
 {"type":"response_item","timestamp":"2026-08-01T10:20:00.000Z","payload":{"type":"message","text":"done"}}

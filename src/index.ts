@@ -95,4 +95,5 @@ export {
   formatLinkRows,
   formatWhen,
   parsePickerAnswer,
+  sanitizeText,
 } from "./cli/format.js";
