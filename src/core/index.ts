@@ -1,10 +1,13 @@
 /** Pure Action-safe core: types, resolve, stamp, PR parsing. */
+export { AGENT_KINDS, isAgentKind } from "./types.js";
 export type {
   AgentKind,
   IndexStats,
   LinkRecord,
   MatchConfidence,
   MatchReason,
+  PrCommit,
+  PrMeta,
   PrRef,
   ResolveOptions,
   SessionIndex,
@@ -24,14 +27,19 @@ export {
 
 export {
   branchesMatch,
+  commitsMatch,
+  findSession,
+  listSessions,
   resolvePrsForSession,
   resolveSessionsForPr,
+  type ListFilters,
 } from "./resolve.js";
 
 export {
   agentLabel,
   buildStamp,
   extractStampTokens,
+  extractStampTrailers,
   parseStampToken,
   stampToken,
 } from "./stamp.js";

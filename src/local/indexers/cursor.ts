@@ -3,7 +3,16 @@ import path from "node:path";
 import readline from "node:readline";
 import type { LinkRecord, SessionRecord } from "../../core/types.js";
 import { extractPrUrls } from "../../core/pr-ref.js";
+import {
+  absorbScanResult,
+  pruneScanCache,
+  scanWithCache,
+  type FileScanResult,
+  type ScanCache,
+} from "../cache.js";
 import { homePath } from "../paths.js";
+import { upsertSession } from "../store.js";
+import { harvestCommitShas } from "./commits.js";
 import { settleFileScan, settleStat } from "./safe.js";
 
 /** Decode Cursor project dir names like Users-davis-keene-github-joinera */
@@ -30,12 +39,14 @@ export function decodeCursorProjectDir(name: string): {
 
 export async function indexCursor(options?: {
   projectsRoot?: string;
+  cache?: ScanCache;
 }): Promise<{ sessions: SessionRecord[]; links: LinkRecord[] }> {
   const root =
     options?.projectsRoot ?? homePath(".cursor", "projects");
   const sessions = new Map<string, SessionRecord>();
   const links: LinkRecord[] = [];
   const linkKeys = new Set<string>();
+  const seenFiles = new Set<string>();
 
   if (!fs.existsSync(root)) {
     return { sessions: [], links: [] };
@@ -95,19 +106,42 @@ export async function indexCursor(options?: {
         let alt: string | undefined;
         try {
           alt = fs.readdirSync(dir).find((n) => n.endsWith(".jsonl"));
-        } catch {
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          process.stderr.write(
+            `pr-session: skip cursor dir ${dir}: ${msg}\n`,
+          );
           continue;
         }
         if (!alt) continue;
         target = path.join(dir, alt);
       }
 
-      await settleFileScan("cursor", target, () =>
-        scanCursorFile(target, sessionDir, decoded, sessions, links, linkKeys),
-      );
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(target);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(
+          `pr-session: skip cursor file ${target}: ${msg}\n`,
+        );
+        continue;
+      }
+      seenFiles.add(target);
+      await settleFileScan("cursor", target, async () => {
+        const result = await scanWithCache(
+          options?.cache,
+          "cursor",
+          target,
+          stat,
+          () => scanCursorFile(target, sessionDir, decoded, stat),
+        );
+        absorbScanResult(result, sessions, links, linkKeys);
+      });
     }
   }
 
+  if (options?.cache) pruneScanCache(options.cache, "cursor", seenFiles);
   return { sessions: [...sessions.values()], links };
 }
 
@@ -115,17 +149,19 @@ async function scanCursorFile(
   file: string,
   sessionId: string,
   decoded: { cwdGuess?: string; repoGuess?: string },
-  sessions: Map<string, SessionRecord>,
-  links: LinkRecord[],
-  linkKeys: Set<string>,
-): Promise<void> {
-  const stat = fs.statSync(file);
+  stat: fs.Stats,
+): Promise<FileScanResult> {
   const startedAt = stat.birthtime?.toISOString?.() || stat.mtime.toISOString();
   const updatedAt = stat.mtime.toISOString();
+
+  const sessions = new Map<string, SessionRecord>();
+  const links: LinkRecord[] = [];
+  const linkKeys = new Set<string>();
 
   let title: string | undefined;
   let cloudUrl: string | undefined;
   let visibility: "local" | "cloud" = "local";
+  const commits = new Set<string>();
   let lineNo = 0;
 
   const stream = fs.createReadStream(file, { encoding: "utf8" });
@@ -142,6 +178,7 @@ async function scanCursorFile(
     }
 
     const text = flattenContent(obj.message?.content);
+    if (text) harvestCommitShas(text, commits);
     if (!title && obj.role === "user" && text) {
       title = text.replace(/\s+/g, " ").slice(0, 120);
     }
@@ -160,7 +197,7 @@ async function scanCursorFile(
         const key = `${sessionId}:${pr.owner}/${pr.repo}#${pr.number}`;
         if (linkKeys.has(key)) continue;
         linkKeys.add(key);
-        const session: SessionRecord = {
+        const session = upsertSession(sessions, {
           agent: "cursor",
           sessionId,
           transcriptPath: file,
@@ -171,8 +208,8 @@ async function scanCursorFile(
           startedAt,
           updatedAt,
           title,
-        };
-        sessions.set(`cursor:${sessionId}`, preferCursorSession(sessions.get(`cursor:${sessionId}`), session));
+          commits: commits.size ? [...commits] : undefined,
+        });
         links.push({
           pr,
           session,
@@ -185,7 +222,7 @@ async function scanCursorFile(
     if (lineNo > 400 && title) break;
   }
 
-  const record: SessionRecord = {
+  upsertSession(sessions, {
     agent: "cursor",
     sessionId,
     transcriptPath: file,
@@ -196,39 +233,10 @@ async function scanCursorFile(
     startedAt,
     updatedAt,
     title,
-  };
-  sessions.set(
-    `cursor:${sessionId}`,
-    preferCursorSession(sessions.get(`cursor:${sessionId}`), record),
-  );
-}
+    commits: commits.size ? [...commits] : undefined,
+  });
 
-/** Prefer project-rooted transcripts over empty-window / cleanup mirrors. */
-function preferCursorSession(
-  prev: SessionRecord | undefined,
-  next: SessionRecord,
-): SessionRecord {
-  if (!prev) return next;
-  return scoreCursor(next) >= scoreCursor(prev) ? next : prev;
-}
-
-function scoreCursor(s: SessionRecord): number {
-  let n = 0;
-  if (s.cloudUrl) n += 100;
-  if (s.repo) n += 40;
-  if (s.cwd) n += 20;
-  if (s.title) n += 5;
-  const p = (s.transcriptPath || "").toLowerCase();
-  if (p.includes("/empty-window") || p.includes("/.agent-data-cleanup")) {
-    n -= 50;
-  } else if (p.includes("/projects/")) {
-    n += 30;
-  }
-  if (s.updatedAt) {
-    const t = Date.parse(s.updatedAt);
-    if (!Number.isNaN(t)) n += t / 1e15;
-  }
-  return n;
+  return { sessions: [...sessions.values()], links };
 }
 
 function flattenContent(content: unknown): string {

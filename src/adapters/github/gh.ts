@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import type { PrRef } from "../../core/types.js";
+import type { PrCommit, PrRef } from "../../core/types.js";
 import { parsePrRef, prRef } from "../../core/pr-ref.js";
 
 export interface GhPrMeta {
@@ -10,6 +10,7 @@ export interface GhPrMeta {
   createdAt: string;
   updatedAt: string;
   url: string;
+  commits: PrCommit[];
 }
 
 interface GhPrJson {
@@ -21,7 +22,15 @@ interface GhPrJson {
   createdAt: string;
   updatedAt: string;
   headRepository?: { name?: string; owner?: { login?: string } };
+  commits?: Array<{
+    oid?: string;
+    messageHeadline?: string;
+    messageBody?: string;
+  }>;
 }
+
+const PR_VIEW_FIELDS =
+  "number,url,title,body,headRefName,createdAt,updatedAt,headRepository,commits";
 
 /** Resolve a PR reference, using `gh` when only a number (or partial) is given. */
 export function resolvePrInput(input: string): PrRef {
@@ -52,13 +61,7 @@ export function fetchPrMeta(input: string): GhPrMeta {
 
 function fetchPrByNumber(number: number): GhPrMeta {
   return mapGh(
-    ghJson([
-      "pr",
-      "view",
-      String(number),
-      "--json",
-      "number,url,title,body,headRefName,createdAt,updatedAt,headRepository",
-    ]),
+    ghJson(["pr", "view", String(number), "--json", PR_VIEW_FIELDS]),
   );
 }
 
@@ -71,7 +74,7 @@ function fetchPr(ref: PrRef): GhPrMeta {
       "--repo",
       `${ref.owner}/${ref.repo}`,
       "--json",
-      "number,url,title,body,headRefName,createdAt,updatedAt,headRepository",
+      PR_VIEW_FIELDS,
     ]),
   );
 }
@@ -83,6 +86,14 @@ function mapGh(json: GhPrJson): GhPrMeta {
   const owner =
     fromUrl?.owner || json.headRepository?.owner?.login || "unknown";
   const repo = fromUrl?.repo || json.headRepository?.name || "unknown";
+  const commits: PrCommit[] = [];
+  for (const c of json.commits ?? []) {
+    if (typeof c?.oid !== "string" || !c.oid) continue;
+    const message = [c.messageHeadline, c.messageBody]
+      .filter(Boolean)
+      .join("\n\n");
+    commits.push(message ? { sha: c.oid, message } : { sha: c.oid });
+  }
   return {
     ref: prRef(owner, repo, json.number),
     title: json.title,
@@ -91,6 +102,7 @@ function mapGh(json: GhPrJson): GhPrMeta {
     createdAt: json.createdAt,
     updatedAt: json.updatedAt,
     url: json.url,
+    commits,
   };
 }
 

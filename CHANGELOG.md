@@ -8,9 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Compact `lookup` output: numbered match rows (confidence, agent + short id, branch, last-active, title) with an interactive picker on TTYs — type a row number to resume that session, Enter to skip; `--verbose` restores the old per-match detail
+- `--n <k>` on `open` / `lookup` to resume any match by row number non-interactively
+- `session` accepts unique session-id prefixes (≥6 chars), so short ids from the compact rows resolve directly
+
+- Commit-SHA matching: indexers harvest commit SHAs from transcripts (git commit stdout patterns, Codex `session_meta.git.commit_hash`) and the resolver matches them against the PR's commit list (`commit-sha`, high confidence)
+- `Agent-Session:` git trailers in PR commit messages now resolve as exact stamp matches — the trailers `stamp` emits are finally read back
+- `pr-session list` — browse indexed sessions with `--repo`, `--agent`, `--since` (`7d`/`24h`/ISO), `--limit`, `--json`; each row prints its resume affordance
+- Incremental indexing: per-file mtime+size scan cache at `~/.pr-session/cache.json` makes re-index near-instant; `index --full` forces a full rescan
+- Fixture-based indexer tests for all three agents (`test/fixtures/`)
+
 ### Changed
 
 - `pr-session open` (and `lookup` / `session --open`) resume the interactive session: Claude/Codex CLI resume commands, Cursor agent deeplinks, transcript file only as fallback
+- Duplicate-session merging is unified in one field-wise `mergeSessions` (score-based winner, gap backfill, timestamp union) shared by all indexers and `finalizeIndex`
+- Agent kinds have a single source of truth (`AGENT_KINDS` in `pr-session/types`) — stamp regexes, CLI validation, and store validation all derive from it
+- Codex scanning stops after its meta/URL window (line + byte capped) and uses file mtime for recency, cutting cold index time roughly in half
+- `gh pr view` now also fetches the PR commit list (same single invocation); number-only lookups no longer re-spawn an identical failed `gh` call
+
+### Fixed
+
+- Codex indexer no longer clobbers session metadata (branch/repo/cwd) with `undefined` when the same session appears in both `sessions/` and `archived_sessions/`
 
 ## [0.1.0] — 2026-08-07
 

@@ -3,12 +3,31 @@ import path from "node:path";
 import readline from "node:readline";
 import type { LinkRecord, SessionRecord } from "../../core/types.js";
 import { extractPrUrls, normalizeRepo } from "../../core/pr-ref.js";
+import {
+  absorbScanResult,
+  pruneScanCache,
+  scanWithCache,
+  type FileScanResult,
+  type ScanCache,
+} from "../cache.js";
 import { homePath } from "../paths.js";
+import { upsertSession } from "../store.js";
+import { harvestCommitShas } from "./commits.js";
 import { settleFileScan } from "./safe.js";
+
+/**
+ * Deep-scan budget per rollout file. session_meta is the first line and PR
+ * URLs worth linking appear early; everything after is covered by file mtime.
+ * The byte cap is a safety net for pathological files — single rollout lines
+ * can be hundreds of KB. Below ~1MB it starts dropping real PR-URL links.
+ */
+const SCAN_WINDOW_LINES = 200;
+const SCAN_WINDOW_BYTES = 1024 * 1024;
 
 export async function indexCodex(options?: {
   sessionsRoot?: string;
   archivedRoot?: string;
+  cache?: ScanCache;
 }): Promise<{ sessions: SessionRecord[]; links: LinkRecord[] }> {
   const roots = [
     options?.sessionsRoot ?? homePath(".codex", "sessions"),
@@ -18,16 +37,34 @@ export async function indexCodex(options?: {
   const sessions = new Map<string, SessionRecord>();
   const links: LinkRecord[] = [];
   const linkKeys = new Set<string>();
+  const seenFiles = new Set<string>();
 
   for (const root of roots) {
     if (!fs.existsSync(root)) continue;
     for (const file of walkJsonl(root)) {
-      await settleFileScan("codex", file, () =>
-        scanCodexFile(file, sessions, links, linkKeys),
-      );
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(file);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`pr-session: skip codex file ${file}: ${msg}\n`);
+        continue;
+      }
+      seenFiles.add(file);
+      await settleFileScan("codex", file, async () => {
+        const result = await scanWithCache(
+          options?.cache,
+          "codex",
+          file,
+          stat,
+          () => scanCodexFile(file, stat),
+        );
+        absorbScanResult(result, sessions, links, linkKeys);
+      });
     }
   }
 
+  if (options?.cache) pruneScanCache(options.cache, "codex", seenFiles);
   return { sessions: [...sessions.values()], links };
 }
 
@@ -38,7 +75,9 @@ function* walkJsonl(root: string): Generator<string> {
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`pr-session: skip codex dir ${dir}: ${msg}\n`);
       continue;
     }
     for (const ent of entries) {
@@ -51,12 +90,14 @@ function* walkJsonl(root: string): Generator<string> {
 
 async function scanCodexFile(
   file: string,
-  sessions: Map<string, SessionRecord>,
-  links: LinkRecord[],
-  linkKeys: Set<string>,
-): Promise<void> {
+  stat: fs.Stats,
+): Promise<FileScanResult> {
   const stream = fs.createReadStream(file, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
+  const sessions = new Map<string, SessionRecord>();
+  const links: LinkRecord[] = [];
+  const linkKeys = new Set<string>();
 
   let sessionId =
     path.basename(file).match(
@@ -69,14 +110,21 @@ async function scanCodexFile(
   let startedAt: string | undefined;
   let updatedAt: string | undefined;
   let title: string | undefined;
+  const commits = new Set<string>();
 
-  // Only scan first ~N lines deeply for meta; still scan for PR URLs lightly via sampling
   let lineNo = 0;
-  const prUrlBudget = 200; // lines to search for github PR URLs after meta
+  let bytesSeen = 0;
+  let truncated = false;
 
   for await (const line of rl) {
     lineNo += 1;
+    bytesSeen += line.length + 1;
+    if (lineNo > SCAN_WINDOW_LINES || bytesSeen > SCAN_WINDOW_BYTES) {
+      truncated = true;
+      break;
+    }
     if (!line.trim()) continue;
+    harvestCommitShas(line, commits);
     let obj: {
       type?: string;
       timestamp?: string;
@@ -109,15 +157,17 @@ async function scanCodexFile(
         const norm = normalizeRepo(git.repository_url);
         if (norm) repo = `${norm.owner}/${norm.repo}`;
       }
+      if (typeof git?.commit_hash === "string" && git.commit_hash) {
+        commits.add(git.commit_hash.toLowerCase());
+      }
     }
 
-    if (obj.type === "response_item" && lineNo <= prUrlBudget) {
-      const text = JSON.stringify(obj.payload ?? {});
-      for (const pr of extractPrUrls(text)) {
+    if (obj.type === "response_item") {
+      for (const pr of extractPrUrls(line)) {
         const key = `${sessionId}:${pr.owner}/${pr.repo}#${pr.number}`;
         if (linkKeys.has(key)) continue;
         linkKeys.add(key);
-        const session: SessionRecord = {
+        const session = upsertSession(sessions, {
           agent: "codex",
           sessionId,
           transcriptPath: file,
@@ -128,8 +178,8 @@ async function scanCodexFile(
           startedAt,
           updatedAt,
           title,
-        };
-        sessions.set(`codex:${sessionId}`, session);
+          commits: commits.size ? [...commits] : undefined,
+        });
         links.push({
           pr,
           session,
@@ -139,13 +189,16 @@ async function scanCodexFile(
         });
       }
     }
-
-    // Safety cap for enormous rollouts: after the URL window we still accept
-    // timestamps (above) but stop once the file is absurdly large.
-    if (lineNo >= 50_000) break;
   }
 
-  const record: SessionRecord = {
+  // Lines past the window are only interesting for recency; mtime covers that
+  // without parsing multi-MB rollouts end to end.
+  if (truncated) {
+    const mtimeIso = stat.mtime.toISOString();
+    if (!updatedAt || mtimeIso > updatedAt) updatedAt = mtimeIso;
+  }
+
+  upsertSession(sessions, {
     agent: "codex",
     sessionId,
     transcriptPath: file,
@@ -156,8 +209,8 @@ async function scanCodexFile(
     startedAt,
     updatedAt,
     title,
-  };
-  const key = `codex:${sessionId}`;
-  const prev = sessions.get(key);
-  sessions.set(key, prev ? { ...prev, ...record } : record);
+    commits: commits.size ? [...commits] : undefined,
+  });
+
+  return { sessions: [...sessions.values()], links };
 }

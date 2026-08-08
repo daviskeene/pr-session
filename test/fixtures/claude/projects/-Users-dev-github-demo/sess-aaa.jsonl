@@ -1,0 +1,5 @@
+{"sessionId":"sess-aaa","timestamp":"2026-08-01T10:00:00.000Z","cwd":"/Users/dev/github/demo","gitBranch":"feature/login"}
+{"sessionId":"sess-aaa","timestamp":"2026-08-01T10:05:00.000Z","type":"custom-title","title":"Add login flow"}
+{"sessionId":"sess-aaa","timestamp":"2026-08-01T10:10:00.000Z","type":"pr-link","prUrl":"https://github.com/acme/demo/pull/7"}
+{"sessionId":"sess-aaa","timestamp":"2026-08-01T10:12:00.000Z","toolUseResult":{"stdout":"[feature/login abc1234] Add login flow\n 1 file changed"}}
+{"sessionId":"sess-aaa","timestamp":"2026-08-01T10:15:00.000Z","cwd":"/Users/dev/github/demo"}

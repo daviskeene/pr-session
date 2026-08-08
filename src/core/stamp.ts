@@ -1,4 +1,7 @@
+import { AGENT_KINDS } from "./types.js";
 import type { AgentKind, StampBlock, StampInput } from "./types.js";
+
+const STAMP_TOKEN_SOURCE = `agent-session:\\/\\/(${AGENT_KINDS.join("|")})\\/([A-Za-z0-9._:-]+)`;
 
 export function agentLabel(agent: AgentKind): string {
   switch (agent) {
@@ -19,9 +22,7 @@ export function stampToken(agent: AgentKind, sessionId: string): string {
 export function parseStampToken(
   text: string,
 ): { agent: AgentKind; sessionId: string } | null {
-  const m = text.match(
-    /agent-session:\/\/(claude|codex|cursor)\/([A-Za-z0-9._:-]+)/,
-  );
+  const m = text.match(new RegExp(STAMP_TOKEN_SOURCE));
   if (!m) return null;
   return { agent: m[1] as AgentKind, sessionId: m[2] };
 }
@@ -30,10 +31,25 @@ export function extractStampTokens(
   text: string,
 ): Array<{ agent: AgentKind; sessionId: string }> {
   const out: Array<{ agent: AgentKind; sessionId: string }> = [];
-  const re = /agent-session:\/\/(claude|codex|cursor)\/([A-Za-z0-9._:-]+)/g;
+  const re = new RegExp(STAMP_TOKEN_SOURCE, "g");
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
     out.push({ agent: m[1] as AgentKind, sessionId: m[2] });
+  }
+  return out;
+}
+
+const STAMP_TRAILER_SOURCE = `^Agent-Session:\\s*(${AGENT_KINDS.join("|")})\\/([A-Za-z0-9._:-]+)\\s*$`;
+
+/** Parse `Agent-Session: <agent>/<id>` git trailers (the ones buildStamp emits). */
+export function extractStampTrailers(
+  text: string,
+): Array<{ agent: AgentKind; sessionId: string }> {
+  const out: Array<{ agent: AgentKind; sessionId: string }> = [];
+  const re = new RegExp(STAMP_TRAILER_SOURCE, "gim");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    out.push({ agent: m[1].toLowerCase() as AgentKind, sessionId: m[2] });
   }
   return out;
 }

@@ -3,8 +3,17 @@ import path from "node:path";
 import readline from "node:readline";
 import type { LinkRecord, SessionRecord } from "../../core/types.js";
 import { normalizeRepo, prRef } from "../../core/pr-ref.js";
+import {
+  absorbScanResult,
+  pruneScanCache,
+  scanWithCache,
+  type FileScanResult,
+  type ScanCache,
+} from "../cache.js";
 import { homePath } from "../paths.js";
-import { settleFileScan, settleStat } from "./safe.js";
+import { upsertSession } from "../store.js";
+import { harvestCommitShas } from "./commits.js";
+import { settleFileScan } from "./safe.js";
 
 interface ClaudePrLinkEvent {
   type: "pr-link";
@@ -17,12 +26,14 @@ interface ClaudePrLinkEvent {
 
 export async function indexClaude(options?: {
   projectsRoot?: string;
+  cache?: ScanCache;
 }): Promise<{ sessions: SessionRecord[]; links: LinkRecord[] }> {
   const root =
     options?.projectsRoot ?? homePath(".claude", "projects");
   const sessions = new Map<string, SessionRecord>();
   const links: LinkRecord[] = [];
   const linkKeys = new Set<string>();
+  const seenFiles = new Set<string>();
 
   if (!fs.existsSync(root)) {
     return { sessions: [], links: [] };
@@ -39,14 +50,9 @@ export async function indexClaude(options?: {
 
   for (const projectDir of projectDirs) {
     const abs = path.join(root, projectDir);
-    if (
-      !settleStat("claude dir", abs, () => fs.statSync(abs).isDirectory())
-    ) {
-      continue;
-    }
-
     let names: string[] = [];
     try {
+      if (!fs.statSync(abs).isDirectory()) continue;
       names = fs.readdirSync(abs);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -57,26 +63,40 @@ export async function indexClaude(options?: {
     for (const name of names) {
       if (!name.endsWith(".jsonl")) continue;
       const file = path.join(abs, name);
-      if (!settleStat("claude file", file, () => fs.statSync(file).isFile())) {
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(file);
+        if (!stat.isFile()) continue;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        process.stderr.write(`pr-session: skip claude file ${file}: ${msg}\n`);
         continue;
       }
-      await settleFileScan("claude", file, () =>
-        scanClaudeFile(file, sessions, links, linkKeys),
-      );
+      seenFiles.add(file);
+      await settleFileScan("claude", file, async () => {
+        const result = await scanWithCache(
+          options?.cache,
+          "claude",
+          file,
+          stat,
+          () => scanClaudeFile(file),
+        );
+        absorbScanResult(result, sessions, links, linkKeys);
+      });
     }
   }
 
+  if (options?.cache) pruneScanCache(options.cache, "claude", seenFiles);
   return { sessions: [...sessions.values()], links };
 }
 
-async function scanClaudeFile(
-  file: string,
-  sessions: Map<string, SessionRecord>,
-  links: LinkRecord[],
-  linkKeys: Set<string>,
-): Promise<void> {
+async function scanClaudeFile(file: string): Promise<FileScanResult> {
   const stream = fs.createReadStream(file, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
+  const sessions = new Map<string, SessionRecord>();
+  const links: LinkRecord[] = [];
+  const linkKeys = new Set<string>();
 
   let sessionId = path.basename(file, ".jsonl");
   let cwd: string | undefined;
@@ -84,9 +104,11 @@ async function scanClaudeFile(
   let startedAt: string | undefined;
   let updatedAt: string | undefined;
   let title: string | undefined;
+  const commits = new Set<string>();
 
   for await (const line of rl) {
     if (!line.trim()) continue;
+    harvestCommitShas(line, commits);
     let obj: Record<string, unknown>;
     try {
       obj = JSON.parse(line) as Record<string, unknown>;
@@ -133,6 +155,7 @@ async function scanClaudeFile(
             updatedAt,
             title,
             repo: repoSlugFromCwd(cwd),
+            commits: commits.size ? [...commits] : undefined,
           });
           links.push({
             pr,
@@ -157,7 +180,10 @@ async function scanClaudeFile(
     updatedAt,
     title,
     repo: repoSlugFromCwd(cwd),
+    commits: commits.size ? [...commits] : undefined,
   });
+
+  return { sessions: [...sessions.values()], links };
 }
 
 function parseClaudePr(ev: ClaudePrLinkEvent) {
@@ -178,39 +204,4 @@ function repoSlugFromCwd(cwd?: string): string | undefined {
   if (!cwd) return undefined;
   const parts = cwd.replace(/\\/g, "/").split("/").filter(Boolean);
   return parts[parts.length - 1];
-}
-
-function upsertSession(
-  map: Map<string, SessionRecord>,
-  next: SessionRecord,
-): SessionRecord {
-  const key = `${next.agent}:${next.sessionId}`;
-  const prev = map.get(key);
-  if (!prev) {
-    map.set(key, next);
-    return next;
-  }
-  const merged: SessionRecord = {
-    ...prev,
-    ...next,
-    cwd: next.cwd || prev.cwd,
-    branch: next.branch || prev.branch,
-    repo: next.repo || prev.repo,
-    title: next.title || prev.title,
-    startedAt:
-      prev.startedAt && next.startedAt
-        ? prev.startedAt < next.startedAt
-          ? prev.startedAt
-          : next.startedAt
-        : prev.startedAt || next.startedAt,
-    updatedAt:
-      prev.updatedAt && next.updatedAt
-        ? prev.updatedAt > next.updatedAt
-          ? prev.updatedAt
-          : next.updatedAt
-        : prev.updatedAt || next.updatedAt,
-    transcriptPath: next.transcriptPath || prev.transcriptPath,
-  };
-  map.set(key, merged);
-  return merged;
 }

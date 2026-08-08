@@ -8,12 +8,15 @@
  *   - `pr-session/local`    — filesystem indexers (author machine)
  *   - `pr-session/github`   — local `gh` CLI adapter
  */
+export { AGENT_KINDS, isAgentKind } from "./core/types.js";
 export type {
   AgentKind,
   IndexStats,
   LinkRecord,
   MatchConfidence,
   MatchReason,
+  PrCommit,
+  PrMeta,
   PrRef,
   ResolveOptions,
   SessionIndex,
@@ -25,13 +28,18 @@ export type {
 
 export {
   branchesMatch,
+  commitsMatch,
+  findSession,
+  listSessions,
   resolvePrsForSession,
   resolveSessionsForPr,
+  type ListFilters,
 } from "./core/resolve.js";
 
 export {
   buildStamp,
   extractStampTokens,
+  extractStampTrailers,
   parseStampToken,
   stampToken,
 } from "./core/stamp.js";
@@ -60,13 +68,19 @@ export {
 
 export {
   buildIndex,
+  defaultCachePath,
   defaultIndexPath,
+  emptyScanCache,
   finalizeIndex,
   indexStats,
   loadIndex,
+  loadScanCache,
+  mergeSessions,
   preferSession,
   saveIndex,
+  saveScanCache,
   validateIndex,
+  type ScanCache,
 } from "./local/index.js";
 
 export {
@@ -76,4 +90,9 @@ export {
   type GhPrMeta,
 } from "./adapters/github/index.js";
 
-export { formatLinkForCli } from "./cli/format.js";
+export {
+  formatLinkForCli,
+  formatLinkRows,
+  formatWhen,
+  parsePickerAnswer,
+} from "./cli/format.js";

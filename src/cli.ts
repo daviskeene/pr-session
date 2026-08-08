@@ -9,23 +9,37 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import process from "node:process";
-import { formatLinkForCli } from "./cli/format.js";
+import readline from "node:readline";
 import {
+  formatLinkForCli,
+  formatLinkRows,
+  parsePickerAnswer,
+} from "./cli/format.js";
+import {
+  AGENT_KINDS,
   buildIndex,
   buildStamp,
   defaultIndexPath,
+  emptyScanCache,
   fetchPrMeta,
+  findSession,
   indexStats,
+  isAgentKind,
+  listSessions,
   loadIndex,
+  loadScanCache,
   parsePrRef,
-  resolvePrInput,
   resolvePrsForSession,
   resolveSessionsForPr,
   saveIndex,
+  saveScanCache,
   sessionLaunch,
   sessionOpenLinks,
   type AgentKind,
+  type LinkRecord,
   type MatchConfidence,
+  type PrCommit,
+  type PrRef,
   type SessionRecord,
 } from "./index.js";
 
@@ -39,11 +53,12 @@ const CONFIDENCES = new Set<MatchConfidence>([
 const HELP = `pr-session — map GitHub PRs ↔ Claude Code / Codex / Cursor sessions
 
 Usage:
-  pr-session index [--json]
-  pr-session lookup <pr> [--json] [--open] [--min exact|high|medium|low] [--no-heuristic]
-  pr-session session <agent/id|id> [--json] [--open]
+  pr-session index [--json] [--full]   # --full ignores the scan cache
+  pr-session lookup <pr> [--json] [--open] [--n <k>] [--verbose] [--min exact|high|medium|low] [--no-heuristic]
+  pr-session list [--repo <owner/repo|name>] [--agent <a>] [--since <7d|24h|ISO>] [--limit <n>] [--json]
+  pr-session session <agent/id|id> [--json] [--open]   # id may be a unique prefix (≥6 chars)
   pr-session stamp --agent <claude|codex|cursor> --id <sessionId> [--cloud-url <url>] [--title <t>]
-  pr-session open <pr>          # resume/open the best match (same as lookup --open)
+  pr-session open <pr> [--n <k>]  # resume/open a match (best by default; --n picks by number)
   pr-session stats
   pr-session help
 
@@ -51,6 +66,7 @@ Resume / open:
   Claude → \`claude --resume <id>\`   Codex → \`codex resume <id>\`
   Cursor → desktop deeplink (or cloud URL). Transcript file is last resort.
   \`--open\` / \`open\` run that action. Set PR_SESSION_NO_OPEN=1 to print only.
+  Interactive \`lookup\` ends with a match picker; Enter skips it.
 
 Notes:
   Local transcripts are for the author, not PR reviewers. Cloud session URLs
@@ -79,6 +95,9 @@ async function main(): Promise<void> {
     case "lookup":
       await cmdLookup(argv.slice(1));
       break;
+    case "list":
+      await cmdList(argv.slice(1));
+      break;
     case "session":
       await cmdSession(argv.slice(1));
       break;
@@ -100,8 +119,11 @@ async function main(): Promise<void> {
 
 async function cmdIndex(args: string[]): Promise<void> {
   const asJson = args.includes("--json");
+  const full = args.includes("--full");
   process.stderr.write("Indexing Claude / Codex / Cursor sessions…\n");
-  const index = await buildIndex();
+  const cache = full ? emptyScanCache() : loadScanCache();
+  const index = await buildIndex({ cache });
+  saveScanCache(cache);
   const out = defaultIndexPath();
   saveIndex(index, out);
   const stats = indexStats(index);
@@ -117,7 +139,9 @@ async function cmdIndex(args: string[]): Promise<void> {
 
 async function cmdLookup(args: string[]): Promise<void> {
   const asJson = args.includes("--json");
-  const shouldOpen = args.includes("--open");
+  const verbose = args.includes("--verbose");
+  const nRaw = flagValue(args, "--n");
+  const shouldOpen = args.includes("--open") || nRaw !== undefined;
   const noHeuristic = args.includes("--no-heuristic");
   const min = parseMin(flagValue(args, "--min") ?? "low");
   const input = positionalArgs(args)[0];
@@ -140,6 +164,7 @@ async function cmdLookup(args: string[]): Promise<void> {
       headBranch: meta.headBranch,
       createdAt: meta.createdAt,
       updatedAt: meta.updatedAt,
+      commits: meta.commits,
     },
     { minConfidence: min, heuristic: !noHeuristic },
   );
@@ -162,12 +187,11 @@ async function cmdLookup(args: string[]): Promise<void> {
       ),
     );
     if (shouldOpen) {
-      const best = links[0];
-      if (!best) {
+      if (!links.length) {
         console.error("No session match to open.");
         process.exit(3);
       }
-      launchSession(best.session);
+      launchSession(links[pickIndex(nRaw, links.length)].session);
     }
     return;
   }
@@ -181,15 +205,143 @@ async function cmdLookup(args: string[]): Promise<void> {
     if (shouldOpen) process.exit(3);
     return;
   }
-  for (const link of links) {
-    console.log(`\n- ${formatLinkForCli(link)}`);
-    if (link.session.visibility === "local" && !link.session.cloudUrl) {
-      console.log("  (local transcript — author machine only)");
+
+  if (verbose) {
+    for (const link of links) {
+      console.log(`\n- ${formatLinkForCli(link)}`);
+      if (link.session.visibility === "local" && !link.session.cloudUrl) {
+        console.log("  (local transcript — author machine only)");
+      }
+    }
+  } else {
+    console.log();
+    console.log(formatLinkRows(links, { color: useColor() }));
+    if (
+      links.some(
+        (l) => l.session.visibility === "local" && !l.session.cloudUrl,
+      )
+    ) {
+      console.log("\n  local transcripts — author machine only");
     }
   }
+
   if (shouldOpen) {
-    launchSession(links[0].session);
+    launchSession(links[pickIndex(nRaw, links.length)].session);
+  } else if (!verbose) {
+    await promptPick(links);
   }
+}
+
+function useColor(): boolean {
+  return !!process.stdout.isTTY && !process.env.NO_COLOR;
+}
+
+/** Validate `--n` (1-based); defaults to the best match. */
+function pickIndex(nRaw: string | undefined, count: number): number {
+  if (nRaw === undefined) return 0;
+  const n = Number(nRaw);
+  if (!Number.isInteger(n) || n < 1 || n > count) {
+    console.error(`Invalid --n ${nRaw}. Expected 1-${count}.`);
+    process.exit(2);
+  }
+  return n - 1;
+}
+
+/** Interactive match picker — TTY only; Enter (or anything non-numeric) skips. */
+async function promptPick(links: LinkRecord[]): Promise<void> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return;
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  const answer = await new Promise<string>((resolve) =>
+    rl.question(
+      `\nOpen which? [1-${links.length}, Enter to skip]: `,
+      resolve,
+    ),
+  );
+  rl.close();
+  const pick = parsePickerAnswer(answer, links.length);
+  if (pick != null) launchSession(links[pick - 1].session);
+}
+
+async function cmdList(args: string[]): Promise<void> {
+  const asJson = args.includes("--json");
+  const agentRaw = flagValue(args, "--agent");
+  const repo = flagValue(args, "--repo");
+  const sinceRaw = flagValue(args, "--since");
+  const limitRaw = flagValue(args, "--limit");
+
+  let agent: AgentKind | undefined;
+  if (agentRaw !== undefined) {
+    if (!isAgentKind(agentRaw)) {
+      console.error(`--agent must be ${AGENT_KINDS.join("|")}`);
+      process.exit(2);
+    }
+    agent = agentRaw;
+  }
+
+  let limit = 20;
+  if (limitRaw !== undefined) {
+    limit = Number(limitRaw);
+    if (!Number.isInteger(limit) || limit < 1) {
+      console.error(`Invalid --limit ${limitRaw}. Expected a positive integer.`);
+      process.exit(2);
+    }
+  }
+
+  const since = sinceRaw !== undefined ? parseSince(sinceRaw) : undefined;
+  const index = loadIndex();
+  const sessions = listSessions(index, { agent, repo, since, limit });
+
+  if (asJson) {
+    console.log(
+      JSON.stringify(
+        sessions.map((session) => ({
+          ...session,
+          open: sessionOpenLinks(session),
+          launch: sessionLaunch(session),
+        })),
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (!sessions.length) {
+    console.log("No sessions match. Try `pr-session index` first.");
+    return;
+  }
+  for (const session of sessions) {
+    const when = (session.updatedAt || session.startedAt || "").slice(0, 16);
+    const where = [session.repo, session.branch].filter(Boolean).join(" @ ");
+    console.log(
+      `- ${session.agent}:${session.sessionId}${when ? ` (${when})` : ""}${where ? ` ${where}` : ""}`,
+    );
+    if (session.title) console.log(`    ${session.title}`);
+    const open = sessionOpenLinks(session);
+    if (open.resumeCommand) console.log(`    resume ${open.resumeCommand}`);
+    else if (open.openUrl) console.log(`    open ${open.openUrl}`);
+  }
+}
+
+/** Accept `7d` / `24h`-style windows or any ISO date. Returns an ISO floor. */
+function parseSince(raw: string): string {
+  const rel = raw.match(/^(\d+)([dhw])$/i);
+  if (rel) {
+    const n = Number(rel[1]);
+    const unitMs = { h: 3600_000, d: 86_400_000, w: 604_800_000 }[
+      rel[2].toLowerCase() as "h" | "d" | "w"
+    ];
+    return new Date(Date.now() - n * unitMs).toISOString();
+  }
+  const t = Date.parse(raw);
+  if (Number.isNaN(t)) {
+    console.error(`Invalid --since ${raw}. Use 7d, 24h, or an ISO date.`);
+    process.exit(2);
+  }
+  return new Date(t).toISOString();
 }
 
 async function cmdSession(args: string[]): Promise<void> {
@@ -203,17 +355,27 @@ async function cmdSession(args: string[]): Promise<void> {
 
   let agent: AgentKind | undefined;
   let sessionId = raw;
-  const m = raw.match(/^(claude|codex|cursor)[/:](.+)$/);
+  const m = raw.match(new RegExp(`^(${AGENT_KINDS.join("|")})[/:](.+)$`));
   if (m) {
     agent = m[1] as AgentKind;
     sessionId = m[2];
   }
 
   const index = loadIndex();
-  const session = index.sessions.find(
-    (s) => s.sessionId === sessionId && (agent ? s.agent === agent : true),
+  const found = findSession(index, agent, sessionId);
+  if (found.ambiguous) {
+    console.error(`Ambiguous session id ${raw}; candidates:`);
+    for (const s of found.ambiguous) {
+      console.error(`  ${s.agent}:${s.sessionId}`);
+    }
+    process.exit(2);
+  }
+  const session = found.session;
+  const links = resolvePrsForSession(
+    index,
+    agent,
+    session?.sessionId ?? sessionId,
   );
-  const links = resolvePrsForSession(index, agent, sessionId);
 
   if (asJson) {
     console.log(
@@ -271,7 +433,7 @@ async function cmdSession(args: string[]): Promise<void> {
 }
 
 async function cmdStamp(args: string[]): Promise<void> {
-  const agent = flagValue(args, "--agent") as AgentKind | undefined;
+  const agent = flagValue(args, "--agent");
   const id = flagValue(args, "--id");
   const cloudUrl = flagValue(args, "--cloud-url");
   const title = flagValue(args, "--title");
@@ -279,8 +441,8 @@ async function cmdStamp(args: string[]): Promise<void> {
     console.error("stamp requires --agent and --id");
     process.exit(2);
   }
-  if (!["claude", "codex", "cursor"].includes(agent)) {
-    console.error("--agent must be claude|codex|cursor");
+  if (!isAgentKind(agent)) {
+    console.error(`--agent must be ${AGENT_KINDS.join("|")}`);
     process.exit(2);
   }
 
@@ -303,6 +465,7 @@ async function cmdStamp(args: string[]): Promise<void> {
 
 async function cmdOpen(args: string[]): Promise<void> {
   const input = positionalArgs(args)[0];
+  const nRaw = flagValue(args, "--n");
   if (!input) {
     console.error("open requires a PR reference");
     process.exit(2);
@@ -317,13 +480,13 @@ async function cmdOpen(args: string[]): Promise<void> {
     headBranch: meta.headBranch,
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
+    commits: meta.commits,
   });
-  const best = links[0];
-  if (!best) {
+  if (!links.length) {
     console.error("No session match to open.");
     process.exit(3);
   }
-  launchSession(best.session);
+  launchSession(links[pickIndex(nRaw, links.length)].session);
 }
 
 async function cmdStats(): Promise<void> {
@@ -334,13 +497,14 @@ async function cmdStats(): Promise<void> {
 
 function loadPrMetaBestEffort(input: string): {
   meta: {
-    ref: ReturnType<typeof parsePrRef> & object;
+    ref: PrRef;
     body: string;
     headBranch: string;
     createdAt: string;
     updatedAt: string;
     title: string;
     url: string;
+    commits: PrCommit[];
   };
   ghWarning?: string;
 } {
@@ -352,24 +516,8 @@ function loadPrMetaBestEffort(input: string): {
     const ref = parsePrRef(input);
     if (!ref) {
       // Number-only refs need gh; surface the original failure.
-      try {
-        const resolved = resolvePrInput(input);
-        return {
-          meta: {
-            ref: resolved,
-            body: "",
-            headBranch: "",
-            createdAt: "",
-            updatedAt: "",
-            title: "",
-            url: resolved.url,
-          },
-          ghWarning: `gh unavailable (${msg}); matching without PR metadata`,
-        };
-      } catch {
-        console.error(`Could not resolve PR: ${msg}`);
-        process.exit(2);
-      }
+      console.error(`Could not resolve PR: ${msg}`);
+      process.exit(2);
     }
     return {
       meta: {
@@ -380,6 +528,7 @@ function loadPrMetaBestEffort(input: string): {
         updatedAt: "",
         title: "",
         url: ref.url,
+        commits: [],
       },
       ghWarning: `gh unavailable (${msg}); matching without PR body/branch/time`,
     };
@@ -396,7 +545,23 @@ function parseMin(raw: string): MatchConfidence {
   return raw as MatchConfidence;
 }
 
+/** Every flag that consumes the next argv token. Keep in sync with flagValue call sites. */
+const VALUE_FLAGS = new Set([
+  "--min",
+  "--agent",
+  "--id",
+  "--cloud-url",
+  "--title",
+  "--repo",
+  "--since",
+  "--limit",
+  "--n",
+]);
+
 function flagValue(args: string[], name: string): string | undefined {
+  if (!VALUE_FLAGS.has(name)) {
+    throw new Error(`flagValue: ${name} missing from VALUE_FLAGS`);
+  }
   const i = args.indexOf(name);
   if (i < 0) return undefined;
   return args[i + 1];
@@ -407,15 +572,7 @@ function positionalArgs(args: string[]): string[] {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith("--")) {
-      if (
-        a === "--min" ||
-        a === "--agent" ||
-        a === "--id" ||
-        a === "--cloud-url" ||
-        a === "--title"
-      ) {
-        i += 1;
-      }
+      if (VALUE_FLAGS.has(a)) i += 1;
       continue;
     }
     out.push(a);

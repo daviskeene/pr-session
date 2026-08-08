@@ -1,5 +1,13 @@
+/** Every supported agent — the single source of truth. Regexes, validation
+ * sets, and per-agent tallies all derive from this list. */
+export const AGENT_KINDS = ["claude", "codex", "cursor"] as const;
+
 /** Agent that produced a local (or cloud) coding session. */
-export type AgentKind = "claude" | "codex" | "cursor";
+export type AgentKind = (typeof AGENT_KINDS)[number];
+
+export function isAgentKind(value: unknown): value is AgentKind {
+  return (AGENT_KINDS as readonly unknown[]).includes(value);
+}
 
 /** How confident we are in a PR↔session link. */
 export type MatchConfidence = "exact" | "high" | "medium" | "low";
@@ -8,6 +16,7 @@ export type MatchConfidence = "exact" | "high" | "medium" | "low";
 export type MatchReason =
   | "pr-link-event"
   | "stamp"
+  | "commit-sha"
   | "branch+repo+time"
   | "branch+repo"
   | "repo+time+fingerprint"
@@ -38,6 +47,25 @@ export interface SessionRecord {
   title?: string;
   /** Soft agent fingerprint seen in linked PR bodies, if any. */
   fingerprints?: string[];
+  /** Commit SHAs (full or short) observed in the session transcript. */
+  commits?: string[];
+}
+
+/** One commit on a PR, as reported by the forge. */
+export interface PrCommit {
+  /** Full commit SHA. */
+  sha: string;
+  /** Commit message (headline + body) — scanned for Agent-Session trailers. */
+  message?: string;
+}
+
+/** PR metadata the resolver can match against. All fields optional. */
+export interface PrMeta {
+  body?: string;
+  headBranch?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  commits?: PrCommit[];
 }
 
 export interface LinkRecord {

@@ -1,0 +1,2 @@
+{"role":"user","message":{"content":[{"type":"text","text":"Fix the login bug please"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Opened https://github.com/acme/demo/pull/9"}]}}

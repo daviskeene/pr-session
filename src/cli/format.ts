@@ -1,5 +1,90 @@
-import type { LinkRecord } from "../core/types.js";
+import type { LinkRecord, MatchConfidence } from "../core/types.js";
 import { hyperlink, sessionOpenLinks } from "../core/resume.js";
+
+const RESET = "\x1b[0m";
+const DIM = "\x1b[2m";
+const GREEN = "\x1b[32m";
+const YELLOW = "\x1b[33m";
+
+function paint(text: string, code: string, on?: boolean): string {
+  return on ? `${code}${text}${RESET}` : text;
+}
+
+function confidenceColor(confidence: MatchConfidence): string {
+  if (confidence === "exact") return GREEN;
+  if (confidence === "high") return YELLOW;
+  return DIM;
+}
+
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/** `Aug 7` this year, `Aug 2025` otherwise. Empty for missing/bad dates. */
+export function formatWhen(iso?: string, now = new Date()): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const month = MONTHS[d.getMonth()];
+  return d.getFullYear() === now.getFullYear()
+    ? `${month} ${d.getDate()}`
+    : `${month} ${d.getFullYear()}`;
+}
+
+function truncate(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+}
+
+/**
+ * Compact numbered match rows: confidence, agent:short-id, branch/repo,
+ * last-active — with the session title dimmed underneath when known.
+ */
+export function formatLinkRows(
+  links: LinkRecord[],
+  opts: { color?: boolean; now?: Date } = {},
+): string {
+  const rows = links.map((link, i) => {
+    const s = link.session;
+    return {
+      n: String(i + 1),
+      confidence: link.confidence,
+      who: `${s.agent}:${s.sessionId.slice(0, 8)}`,
+      where: truncate(s.branch || s.repo || "", 26),
+      when: formatWhen(s.updatedAt || s.startedAt, opts.now),
+      title: s.title,
+    };
+  });
+  const whoWidth = Math.max(...rows.map((r) => r.who.length));
+  const whereWidth = Math.max(...rows.map((r) => r.where.length));
+
+  const lines: string[] = [];
+  for (const r of rows) {
+    const confidence = paint(
+      r.confidence.padEnd(6),
+      confidenceColor(r.confidence as MatchConfidence),
+      opts.color,
+    );
+    lines.push(
+      `  ${r.n}  ${confidence} ${r.who.padEnd(whoWidth)}  ${r.where.padEnd(whereWidth)}  ${r.when}`.trimEnd(),
+    );
+    if (r.title) {
+      lines.push(`     ${paint(`"${truncate(r.title, 60)}"`, DIM, opts.color)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/** Parse a picker reply: 1-based match number in range, else null (skip). */
+export function parsePickerAnswer(
+  answer: string,
+  max: number,
+): number | null {
+  const trimmed = answer.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const n = Number(trimmed);
+  return n >= 1 && n <= max ? n : null;
+}
 
 /** Human-readable multi-line formatting for CLI stdout. */
 export function formatLinkForCli(link: LinkRecord): string {

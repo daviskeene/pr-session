@@ -37,21 +37,24 @@ Session ids usually fall out of `lookup` itself. If you need to dig: Claude’s 
 ## Commands
 
 ```bash
-pr-session index [--json]
-pr-session lookup <pr> [--json] [--open] [--min exact|high|medium|low] [--no-heuristic]
-pr-session session <agent/id|id> [--json] [--open]
+pr-session index [--json] [--full]
+pr-session lookup <pr> [--json] [--open] [--n <k>] [--verbose] [--min exact|high|medium|low] [--no-heuristic]
+pr-session list [--repo <owner/repo|name>] [--agent <claude|codex|cursor>] [--since <7d|24h|ISO>] [--limit <n>] [--json]
+pr-session session <agent/id|id> [--json] [--open]   # id may be a unique prefix (≥6 chars)
 pr-session stamp --agent <claude|codex|cursor> --id <sessionId> \
   [--cloud-url <url>] [--title <t>] [--trailers|--token]
-pr-session open <pr>    # resume/open the best match (same as lookup --open); PR_SESSION_NO_OPEN=1 to print only
+pr-session open <pr> [--n <k>]   # resume/open a match (best by default); PR_SESSION_NO_OPEN=1 to print only
 pr-session stats
 pr-session help
 ```
 
 `<pr>` can be a full GitHub URL, `owner/repo#123`, or a bare number (uses `gh` against the current repo). Prefer `--min exact` when you only want Claude `pr-link` events and body stamps; `--no-heuristic` drops branch/time/fingerprint matching.
 
+`index` keeps a per-file scan cache at `~/.pr-session/cache.json`, so re-runs only read transcripts that changed (a full rescan of a big tree takes seconds; a cached one takes milliseconds). `--full` ignores the cache. `list` browses the index without needing a PR — "what was I doing in this repo yesterday" is `pr-session list --repo myrepo --since 1d`, and each row prints its resume command.
+
 ## Opening a matched session
 
-`lookup` prints resume / open affordances for each match. `pr-session open <pr>` (or `lookup` / `session` with `--open`) **runs** the best one:
+`lookup` prints compact numbered match rows (confidence, agent + short id, branch, last active) and — on an interactive terminal — ends with a picker: type a match number to resume it, Enter to skip. `--verbose` restores full per-match detail (paths, view URLs, resume commands), and `--json` is unchanged. `pr-session open <pr>` (or `lookup` / `session` with `--open`) **runs** the best match, and `--n 2` picks any match by its row number:
 
 | Agent | Action |
 | --- | --- |
@@ -63,25 +66,29 @@ pr-session help
 
 ```bash
 pr-session lookup 17533
-# … resume cd … && claude --resume be04ee9a-…
+#   1  exact  claude:be04ee9a  main  Aug 7
+#   2  high   codex:019f8676   main  Jul 21
+# Open which? [1-2, Enter to skip]:
 
-pr-session open 17533              # runs that Claude resume
-pr-session lookup 18403 --open     # opens Cursor agent deeplink for best match
-pr-session session claude/be04… --open
+pr-session open 17533              # runs the best match's resume
+pr-session open 17533 --n 2        # runs match #2 instead
+pr-session session claude/be04ee9a --open   # short ids from the rows resolve as prefixes
 ```
 
 Bugbot’s `https://cursor.com/open?link=…` URLs are a different payload (encrypted fix data), not a general open-by-agent-id link. Local Cursor chats still have no shareable `https://` URL for reviewers — the deeplink only works on a machine that already has the chat.
 
 ## How matching works
 
-Exact hits come first: Claude Code’s `pr-link` transcript events, and `agent-session://…` tokens from `stamp` in the PR body. Medium-confidence signals include PR URLs mentioned in a transcript, and the usual branch + repo (+ time window) heuristics, sometimes narrowed by soft body fingerprints like “Generated with Claude Code.” Stamp going forward when you care about a clean reverse path later.
+Exact hits come first: Claude Code’s `pr-link` transcript events, `agent-session://…` tokens from `stamp` in the PR body, and `Agent-Session:` git trailers read back from the PR’s commit messages. Just below exact, commit-SHA matching: the indexers harvest commit SHAs from transcripts (git’s `[branch abc1234]` commit output, Codex `session_meta` git state) and match them against the PR’s commit list — high confidence with zero user effort. Medium-confidence signals include PR URLs mentioned in a transcript, and the usual branch + repo (+ time window) heuristics, sometimes narrowed by soft body fingerprints like “Generated with Claude Code.” Stamp going forward when you care about a clean reverse path later.
 
 ```mermaid
 flowchart LR
   PR[GitHub PR] --> Exact
   Exact[Exact links] --> Out[Ranked sessions]
+  CommitSha[Transcript commit SHAs ↔ PR commits] --> Out
   Heuristic[Heuristics] --> Out
   Stamp[PR body stamps] --> Exact
+  Trailer[Agent-Session commit trailers] --> Exact
   ClaudePrLink[Claude pr-link events] --> Exact
   Mention[Transcript PR URL mentions] --> Exact
   Branch[branch + repo + time] --> Heuristic
@@ -121,7 +128,7 @@ A sketch of a future Action that only surfaces cloud stamps is in [`examples/git
 
 ## Data sources
 
-Claude lives at `~/.claude/projects/**/*.jsonl` (`pr-link`, `sessionId`, `gitBranch`, `cwd`). Codex rollouts are under `~/.codex/sessions/**/*.jsonl` with useful `session_meta` git fields. Cursor chats are under `~/.cursor/projects/*/agent-transcripts/**/*.jsonl`. The cache is always `~/.pr-session/index.json`.
+Claude lives at `~/.claude/projects/**/*.jsonl` (`pr-link`, `sessionId`, `gitBranch`, `cwd`). Codex rollouts are under `~/.codex/sessions/**/*.jsonl` with useful `session_meta` git fields. Cursor chats are under `~/.cursor/projects/*/agent-transcripts/**/*.jsonl`. The index lives at `~/.pr-session/index.json`, the per-file scan cache at `~/.pr-session/cache.json`.
 
 ## When something looks wrong
 

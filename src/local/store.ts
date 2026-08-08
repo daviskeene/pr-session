@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { AGENT_KINDS } from "../core/types.js";
 import type {
   AgentKind,
   IndexStats,
@@ -24,9 +25,7 @@ export function finalizeIndex(
 ): SessionIndex {
   const byId = new Map<string, SessionRecord>();
   for (const s of sessions) {
-    const key = sessionKey(s);
-    const prev = byId.get(key);
-    byId.set(key, prev ? preferSession(prev, s) : s);
+    upsertSession(byId, s);
   }
 
   const canonical = [...byId.values()];
@@ -64,10 +63,9 @@ function sessionScore(s: SessionRecord): number {
   if (s.visibility === "cloud") n += 20;
   if (s.branch) n += 15;
   if (s.title) n += 5;
-  if (s.repo && !isNoiseRepo(s.repo)) n += 40;
-  if (s.cwd && !isNoisePath(s.cwd)) n += 25;
-  if (s.transcriptPath && !isNoisePath(s.transcriptPath)) n += 30;
-  if (s.transcriptPath && isNoisePath(s.transcriptPath)) n -= 40;
+  if (s.repo && s.repo !== "unknown") n += 40;
+  if (s.cwd) n += 25;
+  if (s.transcriptPath) n += 30;
   if (s.updatedAt) {
     const t = Date.parse(s.updatedAt);
     if (!Number.isNaN(t)) n += t / 1e15;
@@ -75,22 +73,75 @@ function sessionScore(s: SessionRecord): number {
   return n;
 }
 
-function isNoiseRepo(repo: string): boolean {
-  const r = repo.toLowerCase();
-  return (
-    r.includes("empty-window") ||
-    r.startsWith(".agent-data") ||
-    r === "unknown"
-  );
+const BACKFILL_FIELDS = [
+  "transcriptPath",
+  "cloudUrl",
+  "cwd",
+  "repo",
+  "branch",
+  "title",
+] as const;
+
+/**
+ * Merge two records for the same session. The higher-provenance copy wins
+ * conflicts; gaps are backfilled from the other copy; the time range spans
+ * both. Never lets an undefined field clobber a defined one.
+ */
+export function mergeSessions(
+  a: SessionRecord,
+  b: SessionRecord,
+): SessionRecord {
+  const winner = preferSession(a, b);
+  const loser = winner === a ? b : a;
+  const merged: SessionRecord = { ...winner };
+
+  for (const field of BACKFILL_FIELDS) {
+    if (merged[field] === undefined && loser[field] !== undefined) {
+      merged[field] = loser[field];
+    }
+  }
+
+  if (winner.visibility === "cloud" || loser.visibility === "cloud") {
+    merged.visibility = "cloud";
+  }
+
+  merged.startedAt = minIso(a.startedAt, b.startedAt);
+  merged.updatedAt = maxIso(a.updatedAt, b.updatedAt);
+
+  if (a.fingerprints || b.fingerprints) {
+    merged.fingerprints = [
+      ...new Set([...(a.fingerprints ?? []), ...(b.fingerprints ?? [])]),
+    ];
+  }
+  if (a.commits || b.commits) {
+    merged.commits = [
+      ...new Set([...(a.commits ?? []), ...(b.commits ?? [])]),
+    ];
+  }
+
+  return merged;
 }
 
-function isNoisePath(p: string): boolean {
-  const lower = p.toLowerCase().replace(/\\/g, "/");
-  return (
-    lower.includes("/empty-window") ||
-    lower.includes("/.agent-data-cleanup") ||
-    lower.includes("projects/empty-window")
-  );
+/** Upsert into a `sessionKey → record` map, merging duplicates. */
+export function upsertSession(
+  map: Map<string, SessionRecord>,
+  next: SessionRecord,
+): SessionRecord {
+  const key = sessionKey(next);
+  const prev = map.get(key);
+  const merged = prev ? mergeSessions(prev, next) : next;
+  map.set(key, merged);
+  return merged;
+}
+
+function minIso(a?: string, b?: string): string | undefined {
+  if (a && b) return a < b ? a : b;
+  return a || b;
+}
+
+function maxIso(a?: string, b?: string): string | undefined {
+  if (a && b) return a > b ? a : b;
+  return a || b;
 }
 
 export function saveIndex(
@@ -140,7 +191,7 @@ export function validateIndex(
     throw new Error(`Invalid index at ${filePath}: links must be an array`);
   }
 
-  const agents = new Set(["claude", "codex", "cursor"]);
+  const agents = new Set<string>(AGENT_KINDS);
   const confidences = new Set(["exact", "high", "medium", "low"]);
 
   for (const [i, s] of obj.sessions.entries()) {
@@ -187,11 +238,9 @@ export function validateIndex(
 }
 
 export function indexStats(index: SessionIndex): IndexStats {
-  const byAgent: Record<AgentKind, number> = {
-    claude: 0,
-    codex: 0,
-    cursor: 0,
-  };
+  const byAgent = Object.fromEntries(
+    AGENT_KINDS.map((kind) => [kind, 0]),
+  ) as Record<AgentKind, number>;
   for (const s of index.sessions) {
     byAgent[s.agent] += 1;
   }

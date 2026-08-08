@@ -3,8 +3,12 @@ import { describe, it } from "node:test";
 import {
   branchesMatch,
   buildStamp,
+  commitsMatch,
+  findSession,
+  listSessions,
   detectAgentFingerprints,
   extractStampTokens,
+  extractStampTrailers,
   finalizeIndex,
   mapGhPrMeta,
   parsePrRef,
@@ -172,6 +176,87 @@ describe("resolveSessionsForPr", () => {
   });
 });
 
+describe("commit-sha matching", () => {
+  const pr = {
+    owner: "acme",
+    repo: "demo",
+    number: 5,
+    url: "https://github.com/acme/demo/pull/5",
+  };
+  const index: SessionIndex = {
+    version: 1,
+    builtAt: "2026-08-01T00:00:00.000Z",
+    sessions: [
+      {
+        agent: "codex",
+        sessionId: "sess-commit",
+        visibility: "local",
+        commits: ["aaaa1111"],
+      },
+      {
+        agent: "claude",
+        sessionId: "sess-other",
+        visibility: "local",
+        commits: ["ffff0000"],
+      },
+    ],
+    links: [],
+  };
+
+  it("matches a session by short-SHA prefix at high confidence", () => {
+    const links = resolveSessionsForPr(index, pr, {
+      commits: [{ sha: "aaaa1111bbbb2222cccc3333dddd4444eeee5555" }],
+    });
+    assert.equal(links.length, 1);
+    assert.equal(links[0].session.sessionId, "sess-commit");
+    assert.equal(links[0].confidence, "high");
+    assert.equal(links[0].reason, "commit-sha");
+  });
+
+  it("resolves Agent-Session trailers in commit messages as exact stamps", () => {
+    const links = resolveSessionsForPr(index, pr, {
+      commits: [
+        {
+          sha: "1234123412341234123412341234123412341234",
+          message:
+            "Add login\n\nAgent-Session: claude/sess-other",
+        },
+      ],
+    });
+    const stamp = links.find((l) => l.reason === "stamp");
+    assert.ok(stamp, "trailer produced a stamp link");
+    assert.equal(stamp.confidence, "exact");
+    assert.equal(stamp.session.sessionId, "sess-other");
+    assert.equal(stamp.session.agent, "claude");
+  });
+
+  it("commitsMatch requires at least 7 hex chars", () => {
+    const sha = ["aaaa1111bbbb2222cccc3333dddd4444eeee5555"];
+    assert.equal(commitsMatch(["aaaa111"], sha), true);
+    assert.equal(commitsMatch(["AAAA1111BBBB"], sha), true);
+    assert.equal(commitsMatch(["aaaa11"], sha), false);
+    assert.equal(commitsMatch(["9999999"], sha), false);
+    assert.equal(commitsMatch(undefined, sha), false);
+    assert.equal(commitsMatch(["aaaa111"], []), false);
+  });
+});
+
+describe("extractStampTrailers", () => {
+  it("parses trailer lines and ignores inline token mentions", () => {
+    const text = [
+      "Fix the thing",
+      "",
+      "see agent-session://codex/not-a-trailer inline",
+      "Agent-Session: claude/abc-123",
+      "Agent-Session: cursor/bc-999",
+    ].join("\n");
+    assert.deepEqual(extractStampTrailers(text), [
+      { agent: "claude", sessionId: "abc-123" },
+      { agent: "cursor", sessionId: "bc-999" },
+    ]);
+  });
+});
+
 describe("resolvePrsForSession", () => {
   it("keeps multiple distinct PRs for one session", () => {
     const session: SessionRecord = {
@@ -217,6 +302,113 @@ describe("resolvePrsForSession", () => {
   });
 });
 
+describe("listSessions", () => {
+  const index: SessionIndex = {
+    version: 1,
+    builtAt: "2026-08-07T00:00:00.000Z",
+    sessions: [
+      {
+        agent: "claude",
+        sessionId: "old",
+        visibility: "local",
+        repo: "demo",
+        cwd: "/Users/dev/github/demo",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      },
+      {
+        agent: "codex",
+        sessionId: "recent",
+        visibility: "local",
+        repo: "acme/demo",
+        updatedAt: "2026-08-06T00:00:00.000Z",
+      },
+      {
+        agent: "cursor",
+        sessionId: "elsewhere",
+        visibility: "local",
+        repo: "acme/widgets",
+        updatedAt: "2026-08-05T00:00:00.000Z",
+      },
+    ],
+    links: [],
+  };
+
+  it("sorts most recently active first", () => {
+    const ids = listSessions(index).map((s) => s.sessionId);
+    assert.deepEqual(ids, ["recent", "elsewhere", "old"]);
+  });
+
+  it("filters by agent, repo, since, and limit", () => {
+    assert.deepEqual(
+      listSessions(index, { agent: "codex" }).map((s) => s.sessionId),
+      ["recent"],
+    );
+    // Bare name matches repo tails and cwd tails across owners.
+    assert.deepEqual(
+      listSessions(index, { repo: "demo" }).map((s) => s.sessionId),
+      ["recent", "old"],
+    );
+    // owner/repo form is exact.
+    assert.deepEqual(
+      listSessions(index, { repo: "acme/demo" }).map((s) => s.sessionId),
+      ["recent"],
+    );
+    assert.deepEqual(
+      listSessions(index, { since: "2026-08-01T00:00:00.000Z" }).map(
+        (s) => s.sessionId,
+      ),
+      ["recent", "elsewhere"],
+    );
+    assert.deepEqual(
+      listSessions(index, { limit: 1 }).map((s) => s.sessionId),
+      ["recent"],
+    );
+  });
+});
+
+describe("findSession", () => {
+  const index: SessionIndex = {
+    version: 1,
+    builtAt: "2026-08-07T00:00:00.000Z",
+    sessions: [
+      { agent: "claude", sessionId: "b0d48547-882c-4b82", visibility: "local" },
+      { agent: "claude", sessionId: "b0d48500-1111-2222", visibility: "local" },
+      { agent: "codex", sessionId: "019f8676-a907-7b63", visibility: "local" },
+    ],
+    links: [],
+  };
+
+  it("finds by exact id and unique prefix", () => {
+    assert.equal(
+      findSession(index, undefined, "019f8676-a907-7b63").session?.agent,
+      "codex",
+    );
+    assert.equal(
+      findSession(index, undefined, "019f8676").session?.agent,
+      "codex",
+    );
+  });
+
+  it("reports ambiguity and rejects short prefixes", () => {
+    const unique = findSession(index, undefined, "b0d4854");
+    assert.equal(unique.session?.sessionId, "b0d48547-882c-4b82");
+    const ambiguous = findSession(index, undefined, "b0d485");
+    assert.equal(ambiguous.session, undefined);
+    assert.equal(ambiguous.ambiguous?.length, 2);
+    const tooShort = findSession(index, undefined, "b0d4");
+    assert.equal(tooShort.session, undefined);
+    assert.equal(tooShort.ambiguous, undefined);
+  });
+
+  it("scopes by agent when given", () => {
+    assert.equal(findSession(index, "claude", "019f8676").session, undefined);
+    assert.equal(
+      findSession(index, "codex", "019f8676").session?.sessionId,
+      "019f8676-a907-7b63",
+    );
+  });
+});
+
 describe("branchesMatch", () => {
   it("matches exact and path-segment suffixes only", () => {
     assert.equal(branchesMatch("feature/x", "feature/x"), true);
@@ -244,6 +436,32 @@ describe("mapGhPrMeta", () => {
     assert.equal(meta.ref.owner, "joinhandshake");
     assert.equal(meta.ref.repo, "joinera");
     assert.equal(meta.ref.number, 42);
+  });
+
+  it("maps PR commits into sha+message", () => {
+    const meta = mapGhPrMeta({
+      number: 43,
+      url: "https://github.com/acme/demo/pull/43",
+      title: "t",
+      body: null,
+      headRefName: "feature",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+      commits: [
+        {
+          oid: "aaaa1111bbbb2222cccc3333dddd4444eeee5555",
+          messageHeadline: "Add login",
+          messageBody: "Agent-Session: codex/sess-1",
+        },
+        { oid: "", messageHeadline: "dropped" },
+      ],
+    });
+    assert.equal(meta.commits.length, 1);
+    assert.equal(
+      meta.commits[0].sha,
+      "aaaa1111bbbb2222cccc3333dddd4444eeee5555",
+    );
+    assert.match(meta.commits[0].message ?? "", /Agent-Session: codex\/sess-1/);
   });
 });
 
